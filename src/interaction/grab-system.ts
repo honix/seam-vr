@@ -3,6 +3,8 @@ import { Vec3, Vec4 } from '../types';
 import { SceneGraph, SceneNode } from '../core/scene-graph';
 import { CommandBus } from '../core/command-bus';
 
+const GRAB_RADIUS = 0.15; // meters - how close hand must be to grab
+
 interface GrabState {
   nodeId: string;
   offsetPosition: THREE.Vector3;
@@ -15,7 +17,6 @@ export class GrabSystem {
   private scene: THREE.Scene;
   private sceneGraph: SceneGraph;
   private commandBus: CommandBus;
-  private raycaster = new THREE.Raycaster();
 
   private grabs: Map<string, GrabState> = new Map(); // hand -> grab state
 
@@ -25,40 +26,49 @@ export class GrabSystem {
     this.commandBus = commandBus;
   }
 
-  tryGrab(hand: 'left' | 'right', position: Vec3, direction: Vec3): boolean {
-    // Set up raycaster
-    this.raycaster.set(
-      new THREE.Vector3(...position),
-      new THREE.Vector3(...direction).normalize()
-    );
+  tryGrab(hand: 'left' | 'right', position: Vec3, _direction: Vec3): boolean {
+    const handPos = new THREE.Vector3(...position);
 
-    // Collect all meshes from scene nodes
-    const meshes: THREE.Mesh[] = [];
-    const meshToNode: Map<THREE.Mesh, SceneNode> = new Map();
+    // Find closest node within grab radius
+    let closestNode: SceneNode | null = null;
+    let closestDist = GRAB_RADIUS;
 
     this.sceneGraph.traverse((node) => {
-      if (node.mesh) {
-        meshes.push(node.mesh);
-        meshToNode.set(node.mesh, node);
+      if (!node.mesh) return;
+
+      // Distance from hand to mesh center
+      const meshPos = node.mesh.position;
+      const dist = handPos.distanceTo(meshPos);
+
+      // Also check against bounding sphere for better accuracy
+      if (!node.mesh.geometry.boundingSphere) {
+        node.mesh.geometry.computeBoundingSphere();
+      }
+      const bs = node.mesh.geometry.boundingSphere;
+      const surfaceDist = bs ? Math.max(0, dist - bs.radius * Math.max(
+        node.mesh.scale.x, node.mesh.scale.y, node.mesh.scale.z
+      )) : dist;
+
+      if (surfaceDist < closestDist) {
+        closestDist = surfaceDist;
+        closestNode = node;
       }
     });
 
-    if (meshes.length === 0) return false;
+    if (!closestNode) return false;
+    const node = closestNode as SceneNode;
 
-    const intersects = this.raycaster.intersectObjects(meshes, false);
-    if (intersects.length === 0) return false;
-
-    const hitMesh = intersects[0].object as THREE.Mesh;
-    const node = meshToNode.get(hitMesh);
-    if (!node) return false;
-
-    // Compute offset: hand position/rotation relative to the primitive
-    const handPos = new THREE.Vector3(...position);
+    // Compute offset: primitive position relative to hand
     const meshPos = new THREE.Vector3(...node.transform.position);
     const offsetPos = meshPos.clone().sub(handPos);
 
-    const handQuat = new THREE.Quaternion(); // identity for now
-    const meshQuat = new THREE.Quaternion(...node.transform.rotation);
+    const handQuat = new THREE.Quaternion();
+    const meshQuat = new THREE.Quaternion(
+      node.transform.rotation[0],
+      node.transform.rotation[1],
+      node.transform.rotation[2],
+      node.transform.rotation[3]
+    );
     const offsetQuat = handQuat.clone().invert().multiply(meshQuat);
 
     this.grabs.set(hand, {

@@ -51,6 +51,9 @@ export class InteractionManager {
       }
     }
 
+    // Keep handles following the selected object
+    this.handleSystem.updatePosition();
+
     // Update handle drag if active
     if (this.handleSystem.isDragging) {
       // Use right controller position for handle dragging

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Seam VR</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; }
+    #canvas-container { width: 100%; height: 100%; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #vr-button {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      padding: 12px 24px;
+      background: #6c63ff;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      z-index: 100;
+      display: none;
+    }
+    #vr-button:hover { background: #5a52d5; }
+    #vr-button.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  <button id="vr-button">Enter VR</button>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

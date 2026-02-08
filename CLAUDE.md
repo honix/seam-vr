@@ -44,6 +44,7 @@ See `/design/` folder:
 - `rendering.md` - seam hiding, materials, visual style
 - `platform.md` - sharing, scripting, multiplayer, AI (future phases)
 - `tech-decisions.md` - why browser, why primitives, lessons from render-sdf
+- `test-harness.md` - automated testing via command bus, XR emulation, visual regression
 
 ## Development Phases
 

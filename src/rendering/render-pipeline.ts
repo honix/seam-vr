@@ -16,64 +16,63 @@ function createGeometry(
   switch (type) {
     case 'cylinder':
       return new THREE.CylinderGeometry(
-        params.radiusTop ?? 0.5,
-        params.radiusBottom ?? 0.5,
-        params.height ?? 1,
-        params.radialSegments ?? 32,
-        params.heightSegments ?? 8
+        params.radiusTop ?? 0.05,
+        params.radiusBottom ?? 0.05,
+        params.height ?? 0.1,
+        params.radialSegments ?? 16,
+        params.heightSegments ?? 12
       );
     case 'sphere':
       return new THREE.SphereGeometry(
-        params.radius ?? 0.5,
-        params.widthSegments ?? 32,
+        params.radius ?? 0.05,
+        params.widthSegments ?? 24,
         params.heightSegments ?? 16
       );
     case 'box':
       return new THREE.BoxGeometry(
-        params.width ?? 1,
-        params.height ?? 1,
-        params.depth ?? 1,
+        params.width ?? 0.1,
+        params.height ?? 0.1,
+        params.depth ?? 0.1,
         params.widthSegments ?? 4,
         params.heightSegments ?? 4,
         params.depthSegments ?? 4
       );
     case 'cone':
       return new THREE.ConeGeometry(
-        params.radius ?? 0.5,
-        params.height ?? 1,
-        params.radialSegments ?? 32,
-        params.heightSegments ?? 8
+        params.radius ?? 0.05,
+        params.height ?? 0.1,
+        params.radialSegments ?? 16,
+        params.heightSegments ?? 12
       );
     case 'torus':
       return new THREE.TorusGeometry(
-        params.radius ?? 0.5,
-        params.tube ?? 0.2,
+        params.radius ?? 0.05,
+        params.tube ?? 0.015,
         params.radialSegments ?? 16,
-        params.tubularSegments ?? 48
+        params.tubularSegments ?? 32
       );
     case 'capsule':
       return new THREE.CapsuleGeometry(
-        params.radius ?? 0.25,
-        params.length ?? 0.5,
+        params.radius ?? 0.03,
+        params.length ?? 0.1,
         params.capSegments ?? 8,
         params.radialSegments ?? 16
       );
     case 'tube': {
-      // Tube along a straight line by default; params.points could customize
       const path = new THREE.LineCurve3(
-        new THREE.Vector3(0, -(params.length ?? 1) / 2, 0),
-        new THREE.Vector3(0, (params.length ?? 1) / 2, 0)
+        new THREE.Vector3(0, -(params.length ?? 0.1) / 2, 0),
+        new THREE.Vector3(0, (params.length ?? 0.1) / 2, 0)
       );
       return new THREE.TubeGeometry(
         path,
-        params.tubularSegments ?? 16,
-        params.radius ?? 0.15,
-        params.radialSegments ?? 12,
+        params.tubularSegments ?? 32,
+        params.radius ?? 0.01,
+        params.radialSegments ?? 8,
         false
       );
     }
     default:
-      return new THREE.BoxGeometry(1, 1, 1);
+      return new THREE.BoxGeometry(0.1, 0.1, 0.1);
   }
 }
 

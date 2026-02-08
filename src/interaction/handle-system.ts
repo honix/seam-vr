@@ -6,7 +6,7 @@ import { CommandBus } from '../core/command-bus';
 interface HandleInfo {
   mesh: THREE.Mesh;
   axis: 'x' | 'y' | 'z';
-  param: string;
+  axisIndex: 0 | 1 | 2; // index into scale Vec3
   direction: THREE.Vector3;
 }
 
@@ -14,11 +14,12 @@ interface DragState {
   handle: HandleInfo;
   nodeId: string;
   startPosition: THREE.Vector3;
-  initialValue: number;
+  initialScale: Vec3;
 }
 
-const HANDLE_RADIUS = 0.02;
-const HANDLE_DISTANCE = 0.3;
+const HANDLE_RADIUS = 0.020;
+const HANDLE_DISTANCE = 0.20;
+const GRAB_THRESHOLD = 0.06; // proximity grab for handles too
 
 const AXIS_COLORS = {
   x: 0xff4444,
@@ -30,7 +31,6 @@ export class HandleSystem {
   private scene: THREE.Scene;
   private sceneGraph: SceneGraph;
   private commandBus: CommandBus;
-  private raycaster = new THREE.Raycaster();
 
   private handles: HandleInfo[] = [];
   private handleGroup: THREE.Group = new THREE.Group();
@@ -52,30 +52,24 @@ export class HandleSystem {
     this.hideHandles();
     this.activeNodeId = nodeId;
 
-    // Create handles based on the primitive type's deformable axes
     const handleGeo = new THREE.SphereGeometry(HANDLE_RADIUS, 8, 8);
 
-    const axes: Array<{ axis: 'x' | 'y' | 'z'; param: string; dir: THREE.Vector3 }> = [
-      { axis: 'x', param: 'scaleX', dir: new THREE.Vector3(1, 0, 0) },
-      { axis: 'y', param: 'scaleY', dir: new THREE.Vector3(0, 1, 0) },
-      { axis: 'z', param: 'scaleZ', dir: new THREE.Vector3(0, 0, 1) },
+    const axes: Array<{ axis: 'x' | 'y' | 'z'; axisIndex: 0 | 1 | 2; dir: THREE.Vector3 }> = [
+      { axis: 'x', axisIndex: 0, dir: new THREE.Vector3(1, 0, 0) },
+      { axis: 'y', axisIndex: 1, dir: new THREE.Vector3(0, 1, 0) },
+      { axis: 'z', axisIndex: 2, dir: new THREE.Vector3(0, 0, 1) },
     ];
 
-    for (const { axis, param, dir } of axes) {
+    for (const { axis, axisIndex, dir } of axes) {
       // Positive direction handle
       const mat = new THREE.MeshBasicMaterial({ color: AXIS_COLORS[axis] });
       const mesh = new THREE.Mesh(handleGeo.clone(), mat);
       mesh.position.copy(dir.clone().multiplyScalar(HANDLE_DISTANCE));
       this.handleGroup.add(mesh);
 
-      this.handles.push({
-        mesh,
-        axis,
-        param,
-        direction: dir.clone(),
-      });
+      this.handles.push({ mesh, axis, axisIndex, direction: dir.clone() });
 
-      // Negative direction handle
+      // Negative direction handle (semi-transparent)
       const matNeg = new THREE.MeshBasicMaterial({
         color: AXIS_COLORS[axis],
         opacity: 0.5,
@@ -85,12 +79,7 @@ export class HandleSystem {
       meshNeg.position.copy(dir.clone().multiplyScalar(-HANDLE_DISTANCE));
       this.handleGroup.add(meshNeg);
 
-      this.handles.push({
-        mesh: meshNeg,
-        axis,
-        param,
-        direction: dir.clone().negate(),
-      });
+      this.handles.push({ mesh: meshNeg, axis, axisIndex, direction: dir.clone().negate() });
     }
 
     // Position handle group at the node's position
@@ -100,7 +89,6 @@ export class HandleSystem {
   }
 
   hideHandles(): void {
-    // Remove all handle meshes
     while (this.handleGroup.children.length > 0) {
       const child = this.handleGroup.children[0];
       this.handleGroup.remove(child);
@@ -114,31 +102,36 @@ export class HandleSystem {
     this.handleGroup.visible = false;
   }
 
-  tryGrabHandle(position: Vec3, direction: Vec3): boolean {
-    if (this.handles.length === 0) return false;
+  tryGrabHandle(position: Vec3, _direction: Vec3): boolean {
+    if (this.handles.length === 0 || !this.activeNodeId) return false;
 
-    this.raycaster.set(
-      new THREE.Vector3(...position),
-      new THREE.Vector3(...direction).normalize()
-    );
+    const handPos = new THREE.Vector3(...position);
 
-    const handleMeshes = this.handles.map((h) => h.mesh);
-    const intersects = this.raycaster.intersectObjects(handleMeshes, false);
+    // Find closest handle within grab threshold (proximity-based)
+    let closestHandle: HandleInfo | null = null;
+    let closestDist = GRAB_THRESHOLD;
 
-    if (intersects.length === 0) return false;
+    for (const handle of this.handles) {
+      // Get world position of handle
+      const worldPos = new THREE.Vector3();
+      handle.mesh.getWorldPosition(worldPos);
+      const dist = handPos.distanceTo(worldPos);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestHandle = handle;
+      }
+    }
 
-    const hitMesh = intersects[0].object as THREE.Mesh;
-    const handle = this.handles.find((h) => h.mesh === hitMesh);
-    if (!handle || !this.activeNodeId) return false;
+    if (!closestHandle) return false;
 
     const node = this.sceneGraph.getNode(this.activeNodeId);
     if (!node) return false;
 
     this.dragState = {
-      handle,
+      handle: closestHandle,
       nodeId: this.activeNodeId,
-      startPosition: new THREE.Vector3(...position),
-      initialValue: node.params[handle.param] ?? 1,
+      startPosition: handPos.clone(),
+      initialScale: [...node.transform.scale],
     };
 
     return true;
@@ -159,11 +152,22 @@ export class HandleSystem {
     // Project delta onto the handle's axis direction
     const axisDelta = delta.dot(this.dragState.handle.direction);
 
-    // Map axis delta to parameter change (scale sensitivity)
-    const sensitivity = 2.0;
-    const newValue = Math.max(0.01, this.dragState.initialValue + axisDelta * sensitivity);
+    // Map drag distance to scale change (sensitivity tuned for small primitives)
+    const sensitivity = 5.0;
+    const idx = this.dragState.handle.axisIndex;
+    const newScale = Math.max(0.01, this.dragState.initialScale[idx] + axisDelta * sensitivity);
 
-    node.params[this.dragState.handle.param] = newValue;
+    // Update transform scale
+    node.transform.scale[idx] = newScale;
+
+    // Update mesh immediately for visual feedback
+    if (node.mesh) {
+      node.mesh.scale.set(
+        node.transform.scale[0],
+        node.transform.scale[1],
+        node.transform.scale[2]
+      );
+    }
   }
 
   releaseHandle(): void {
@@ -171,15 +175,23 @@ export class HandleSystem {
 
     const node = this.sceneGraph.getNode(this.dragState.nodeId);
     if (node) {
+      // Commit scale change via command bus for undo support
       this.commandBus.exec({
-        cmd: 'set_param',
+        cmd: 'set_transform',
         id: this.dragState.nodeId,
-        key: this.dragState.handle.param,
-        value: node.params[this.dragState.handle.param],
+        scale: [...node.transform.scale],
       });
     }
 
     this.dragState = null;
+  }
+
+  updatePosition(): void {
+    if (!this.activeNodeId) return;
+    const node = this.sceneGraph.getNode(this.activeNodeId);
+    if (!node) return;
+    const pos = node.transform.position;
+    this.handleGroup.position.set(pos[0], pos[1], pos[2]);
   }
 
   get isActive(): boolean {

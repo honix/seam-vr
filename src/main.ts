@@ -33,6 +33,10 @@ import { TimelineController } from './animation/timeline-controller';
 // UI
 import { UIManager } from './ui/ui-manager';
 
+// Sculpting
+import { SculptEngine } from './sculpting/sculpt-engine';
+import { SculptInteraction } from './sculpting/sculpt-interaction';
+
 async function init() {
   // --- Renderer ---
   const container = document.getElementById('canvas-container')!;
@@ -138,6 +142,11 @@ async function init() {
     uiManager.palette
   );
 
+  // --- Sculpting ---
+  const sculptEngine = new SculptEngine(scene);
+  await sculptEngine.initGPU();
+  const sculptInteraction = new SculptInteraction(sculptEngine);
+
   // --- Test Harness ---
   initTestHarness(commandBus, sceneGraph);
 
@@ -175,10 +184,18 @@ async function init() {
     // Update input and interaction
     if (useEmulator) {
       xrEmulator.update();
-      interactionManager.update();
+      if (modeManager.currentMode === 'sculpt') {
+        sculptInteraction.update(xrEmulator.right, xrEmulator.left);
+      } else {
+        interactionManager.update();
+      }
     } else if (xrSession.isInVR()) {
       controllerTracker.update();
-      interactionManagerVR.update();
+      if (modeManager.currentMode === 'sculpt') {
+        sculptInteraction.update(controllerTracker.right, controllerTracker.left);
+      } else {
+        interactionManagerVR.update();
+      }
     }
 
     // Update orbit camera (only when not in VR)

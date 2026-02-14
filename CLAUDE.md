@@ -2,7 +2,7 @@
 
 ## Project: Seam VR
 
-Browser-based VR creation platform for 3D animation and interactive content. Primitive composition approach (deformable cylinders, spheres, tubes, etc.) with non-destructive editing, performance capture animation, and URL-based sharing.
+Browser-based VR creation platform for 3D animation and interactive content. SDF sculpting is the primary creation tool, with deformable parametric primitives available as a secondary composition approach. Performance capture animation and URL-based sharing.
 
 ## Vision
 
@@ -10,19 +10,38 @@ Browser-based VR creation platform for 3D animation and interactive content. Pri
 
 ## Core Principles
 
-- **Primitives, not voxels** - compose shapes from deformable parametric primitives. No SDF, no marching cubes, no GPU mesh extraction bottleneck.
-- **Non-destructive** - every parameter editable at any time. Scene = list of primitives + transforms + deformations.
+- **Sculpt-first** - SDF-based sculpting is the main expression tool. Add, subtract, and move material with VR controllers to build organic shapes in real time.
+- **Primitives as building blocks** - deformable parametric primitives (cylinders, spheres, tubes) remain available for quick composition and non-destructive editing.
 - **VR-first creation, flat-screen viewing** - build in VR headset, share via URL for anyone to watch on any device.
-- **Web-native** - zero install, runs in browser. WebGPU for rendering, WebXR for VR.
+- **Web-native** - zero install, runs in browser. WebGPU for rendering and GPU compute, WebXR for VR.
 
 ## Tech Stack
 
-- **WebGPU** (Three.js or raw) for rendering
+- **WebGPU** (Three.js + raw compute pipelines) for rendering and GPU-accelerated sculpting
 - **WebXR** for VR input/display
 - **TypeScript** for application code
-- **WGSL** shaders for rendering and post-processing
+- **WGSL** shaders for rendering, post-processing, and compute (SDF brush ops, marching cubes mesh extraction)
 
 ## Architecture
+
+### Sculpt pipeline (primary)
+
+```
+VR controller input (SculptInteraction)
+    ↓
+SculptEngine → capsule brush applied to sparse chunked SDF volume
+    ↓ GPU compute: sdf-brush.compute.wgsl (modify SDF values)
+    ↓ GPU compute: build-padded.compute.wgsl (assemble padded chunk buffer)
+    ↓ GPU compute: marching-cubes.compute.wgsl (extract triangle mesh)
+    ↓
+Per-chunk Three.js BufferGeometry with clay PBR material
+    ↓
+WebXR stereo output (VR) or canvas (flat screen)
+```
+
+Key details: 32³ cells/chunk, 2mm voxel size, sparse allocation, pooled GPU buffers. Brush types: add (smooth union), subtract (smooth difference), move (grab-and-drag displacement). Deferred remeshing for boundary chunks keeps frame time ~3-5ms per stroke.
+
+### Primitive pipeline (secondary)
 
 ```
 Primitives (parametric meshes)
@@ -34,6 +53,10 @@ Post-processing (screen-space normal smoothing for seams, AO, bloom)
     ↓
 WebXR stereo output (VR) or canvas (flat screen)
 ```
+
+### Modes
+
+Mode manager cycles through: `handle` → `free-deform` → `sculpt` → `play`. Sculpt mode routes input to SculptInteraction/SculptEngine; other modes use InteractionManager for primitive manipulation.
 
 ## Key Design Docs
 
@@ -48,8 +71,8 @@ See `/design/` folder:
 
 ## Development Phases
 
-1. **MVP**: VR primitive creation + deformation + basic animation + URL sharing
-2. **Polish**: Seam quality, materials, lighting, flat-screen viewer
+1. **MVP**: VR sculpting + primitive creation + deformation + basic animation + URL sharing
+2. **Polish**: Sculpt tool refinement, materials, lighting, flat-screen viewer
 3. **Scripting**: Interactive behaviors, visual + code scripting, AI assist
 4. **Multiplayer**: Shared creation spaces, real-time collaboration
 5. **Platform**: User profiles, content discovery, remixing

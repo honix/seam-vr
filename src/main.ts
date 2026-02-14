@@ -33,6 +33,10 @@ import { TimelineController } from './animation/timeline-controller';
 // UI
 import { UIManager } from './ui/ui-manager';
 
+// Sculpting
+import { SculptEngine } from './sculpting/sculpt-engine';
+import { SculptInteraction } from './sculpting/sculpt-interaction';
+
 async function init() {
   // --- Renderer ---
   const container = document.getElementById('canvas-container')!;
@@ -138,8 +142,16 @@ async function init() {
     uiManager.palette
   );
 
+  // --- Sculpting ---
+  const sculptEngine = new SculptEngine(scene);
+  await sculptEngine.initGPU();
+  const sculptInteraction = new SculptInteraction(sculptEngine);
+
   // --- Test Harness ---
   initTestHarness(commandBus, sceneGraph);
+  window.__seam.sculptEngine = sculptEngine;
+  window.__seam.modeManager = modeManager;
+  window.__seam.camera = camera;
 
   // Wire emulator commands through the test harness
   const origExec = commandBus.exec.bind(commandBus);
@@ -162,8 +174,13 @@ async function init() {
   // --- Clock for deltaTime ---
   const clock = new THREE.Clock();
 
+  // --- Frame timing ---
+  let frameCount = 0;
+  let frameTotalMs = 0;
+
   // --- Render Loop ---
   renderer.setAnimationLoop(() => {
+    const frameStart = performance.now();
     const deltaTime = clock.getDelta();
 
     // Update animation
@@ -175,10 +192,18 @@ async function init() {
     // Update input and interaction
     if (useEmulator) {
       xrEmulator.update();
-      interactionManager.update();
+      if (modeManager.currentMode === 'sculpt') {
+        sculptInteraction.update(xrEmulator.right, xrEmulator.left);
+      } else {
+        interactionManager.update();
+      }
     } else if (xrSession.isInVR()) {
       controllerTracker.update();
-      interactionManagerVR.update();
+      if (modeManager.currentMode === 'sculpt') {
+        sculptInteraction.update(controllerTracker.right, controllerTracker.left);
+      } else {
+        interactionManagerVR.update();
+      }
     }
 
     // Update orbit camera (only when not in VR)
@@ -190,7 +215,25 @@ async function init() {
     uiManager.update();
 
     // Render
+    const renderStart = performance.now();
     renderer.render(scene, camera);
+    const renderMs = performance.now() - renderStart;
+
+    // Log frame timing every 120 frames (~2 seconds)
+    const frameMs = performance.now() - frameStart;
+    frameTotalMs += frameMs;
+    frameCount++;
+    if (frameCount >= 120) {
+      const avg = frameTotalMs / frameCount;
+      const info = renderer.info;
+      console.log(
+        `[Frame] avg: ${avg.toFixed(1)}ms, render: ${renderMs.toFixed(1)}ms, ` +
+        `drawCalls: ${info.render.calls}, triangles: ${info.render.triangles}, ` +
+        `geometries: ${info.memory.geometries}, textures: ${info.memory.textures}`
+      );
+      frameCount = 0;
+      frameTotalMs = 0;
+    }
   });
 
   console.log('[Seam VR] Fully initialized');

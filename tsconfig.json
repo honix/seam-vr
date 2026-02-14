@@ -14,7 +14,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["three"],
+    "types": ["three", "@webgpu/types"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]

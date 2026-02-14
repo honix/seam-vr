@@ -100,6 +100,7 @@ export class SculptEngine {
 
     this.strokeInFlight = true;
     try {
+      const t0 = performance.now();
       const brush: BrushParams = {
         type: this._brushType,
         center: worldPos,
@@ -114,8 +115,9 @@ export class SculptEngine {
       );
       const modifiedChunks: Chunk[] = coords.map(c => this.volume.getOrCreateChunk(c));
 
-      // Batch brush: single GPU submission, single fence
+      const t1 = performance.now();
       await this.gpu.applyBrushBatch(modifiedChunks, brush);
+      const t2 = performance.now();
 
       for (const chunk of modifiedChunks) {
         chunk.dirty = true;
@@ -123,7 +125,20 @@ export class SculptEngine {
       }
 
       const extraChunks = this.volume.syncBoundaries(modifiedChunks);
-      await this.remeshChunks([...modifiedChunks, ...extraChunks]);
+      const remeshList = [...modifiedChunks, ...extraChunks];
+      const t3 = performance.now();
+      await this.remeshChunks(remeshList);
+      const t4 = performance.now();
+
+      const total = t4 - t0;
+      if (total > 5) {
+        console.log(
+          `[Stroke] ${total.toFixed(1)}ms total | ` +
+          `brush: ${(t2 - t1).toFixed(1)}ms (${modifiedChunks.length} chunks) | ` +
+          `remesh: ${(t4 - t3).toFixed(1)}ms (${remeshList.length} chunks) | ` +
+          `sync: ${(t3 - t2).toFixed(1)}ms`
+        );
+      }
     } finally {
       this.strokeInFlight = false;
     }

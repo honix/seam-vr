@@ -15,8 +15,13 @@ interface ChunkGPUData {
   sdfBuffer: GPUBuffer;
 }
 
-// Max chunks we'll ever process in one stroke
-const MAX_BATCH = 8;
+// Max chunks per GPU round (pool slots). Overflow handled by multi-round.
+const MAX_BATCH = 4;
+
+// Realistic max vertices per chunk. Theoretical max is cs^3*15 (491K),
+// but real sculpt surfaces rarely exceed 30% cell fill = ~100K vertices.
+// This caps GPU pool memory at ~40MB instead of ~183MB.
+const MAX_VERTICES_PER_CHUNK = 100_000;
 
 export class GPUCompute {
   private device: GPUDevice | null = null;
@@ -143,7 +148,7 @@ export class GPUCompute {
     this.sdfSize = samples * samples * samples * 4;
     this.sliceSize = 6 * samples * samples * 4;
     this.paddedSize = padded * padded * padded * 4;
-    this.vertexBufferSize = cs * cs * cs * 15 * 6 * 4;
+    this.vertexBufferSize = MAX_VERTICES_PER_CHUNK * 6 * 4;
 
     for (let i = 0; i < MAX_BATCH; i++) {
       // Brush uniforms (64 bytes)
@@ -387,8 +392,10 @@ export class GPUCompute {
       await Promise.all(mapPromises);
 
       for (let i = 0; i < n; i++) {
-        const vc = new Uint32Array(this.counterReadbackBuffers[i].getMappedRange())[0];
+        const rawCount = new Uint32Array(this.counterReadbackBuffers[i].getMappedRange())[0];
         this.counterReadbackBuffers[i].unmap();
+        // Clamp to buffer capacity (MC shader may exceed if surface is dense)
+        const vc = Math.min(rawCount, MAX_VERTICES_PER_CHUNK);
 
         if (vc === 0) {
           this.vertexReadbackBuffers[i].unmap();

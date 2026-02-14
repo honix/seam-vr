@@ -185,6 +185,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Atomic append 3 vertices
     let vert_idx = atomicAdd(&counter, 3u);
+    let max_verts = arrayLength(&vertices) / 6u;
+    if (vert_idx + 3u > max_verts) {
+      break; // Buffer full — skip remaining triangles
+    }
     let base = vert_idx * 6u; // 6 floats per vertex (pos + normal)
 
     // Vertex 0

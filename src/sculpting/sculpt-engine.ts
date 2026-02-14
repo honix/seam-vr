@@ -32,6 +32,7 @@ export class SculptEngine {
   private _brushRadius: number = 0.02; // 2cm default
   private _brushStrength: number = 1.0;
   private _brushSmoothing: number = 0.005;
+  private _prevStrokePos: [number, number, number] | null = null;
 
   // Concurrent stroke guard — drop frames while GPU is busy
   private strokeInFlight = false;
@@ -107,19 +108,32 @@ export class SculptEngine {
     this.strokeInFlight = true;
     try {
       const t0 = performance.now();
+      const prevPos = this._prevStrokePos;
+      this._prevStrokePos = [...worldPos];
+
+      // First frame: just record position, no brush applied.
+      // Capsule on frame 2 will cover both positions without double-application.
+      if (!prevPos) return;
+
       const brush: BrushParams = {
         type: this._brushType,
         center: worldPos,
+        prevCenter: prevPos,
         radius: this._brushRadius,
         strength: this._brushStrength,
         smoothing: this._brushSmoothing,
       };
 
-      const coords = this.volume.chunksInSphere(
-        worldPos[0], worldPos[1], worldPos[2],
-        this._brushRadius + this._brushSmoothing
-      );
-      const modifiedChunks: Chunk[] = coords.map(c => this.volume.getOrCreateChunk(c));
+      // Cover the full capsule extent (both endpoints + radius)
+      const r = this._brushRadius + this._brushSmoothing;
+      const coords = new Map<string, ChunkCoord>();
+      for (const c of this.volume.chunksInSphere(worldPos[0], worldPos[1], worldPos[2], r)) {
+        coords.set(chunkKey(c), c);
+      }
+      for (const c of this.volume.chunksInSphere(prevPos[0], prevPos[1], prevPos[2], r)) {
+        coords.set(chunkKey(c), c);
+      }
+      const modifiedChunks: Chunk[] = [...coords.values()].map(c => this.volume.getOrCreateChunk(c));
 
       const t1 = performance.now();
       await this.gpu.applyBrushBatch(modifiedChunks, brush);
@@ -155,6 +169,13 @@ export class SculptEngine {
     } finally {
       this.strokeInFlight = false;
     }
+  }
+
+  /**
+   * Reset stroke state (call when trigger is released).
+   */
+  endStroke(): void {
+    this._prevStrokePos = null;
   }
 
   /**

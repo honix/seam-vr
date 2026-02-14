@@ -153,9 +153,9 @@ export class GPUCompute {
     this.vertexBufferSize = MAX_VERTICES_PER_CHUNK * 6 * 4;
 
     for (let i = 0; i < MAX_BATCH; i++) {
-      // Brush uniforms (64 bytes)
+      // Brush uniforms (80 bytes — expanded for capsule brush)
       this.brushUniformBuffers.push(this.device.createBuffer({
-        size: 64,
+        size: 80,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       }));
 
@@ -250,17 +250,26 @@ export class GPUCompute {
 
         this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
 
-        const uniformData = new ArrayBuffer(64);
+        // Pack uniform struct matching WGSL BrushUniforms layout (80 bytes):
+        //  0: center (vec3<f32>) + radius (f32)        = 16 bytes
+        //  16: strength (f32) + smoothing (f32) + operation (u32) + _pad0 (u32) = 16 bytes
+        //  32: prev_center (vec3<f32>) + _pad1 (f32)   = 16 bytes
+        //  48: chunk_origin (vec3<f32>) + voxel_size (f32) = 16 bytes
+        //  64: samples_per_axis (u32) + _pad2 (3x u32) = 16 bytes
+        const uniformData = new ArrayBuffer(80);
         const f32 = new Float32Array(uniformData);
         const u32 = new Uint32Array(uniformData);
         f32[0] = brush.center[0]; f32[1] = brush.center[1]; f32[2] = brush.center[2];
-        f32[3] = brush.radius; f32[4] = brush.strength; f32[5] = brush.smoothing;
-        u32[6] = brush.type === 'add' ? 0 : 1; f32[7] = 0;
-        f32[8] = chunk.coord.x * cs * vs; f32[9] = chunk.coord.y * cs * vs;
-        f32[10] = chunk.coord.z * cs * vs; f32[11] = vs;
-        u32[12] = samples; u32[13] = 0;
+        f32[3] = brush.radius;
+        f32[4] = brush.strength; f32[5] = brush.smoothing;
+        u32[6] = brush.type === 'add' ? 0 : 1; u32[7] = 0;
+        f32[8] = brush.prevCenter![0]; f32[9] = brush.prevCenter![1]; f32[10] = brush.prevCenter![2];
+        f32[11] = 0;
+        f32[12] = chunk.coord.x * cs * vs; f32[13] = chunk.coord.y * cs * vs;
+        f32[14] = chunk.coord.z * cs * vs; f32[15] = vs;
+        u32[16] = samples; u32[17] = 0; u32[18] = 0; u32[19] = 0;
 
-        this.device.queue.writeBuffer(this.brushUniformBuffers[i], 0, new Float32Array(uniformData));
+        this.device.queue.writeBuffer(this.brushUniformBuffers[i], 0, new Uint8Array(uniformData));
 
         const bindGroup = this.device.createBindGroup({
           layout: this.brushPipeline.getBindGroupLayout(0),

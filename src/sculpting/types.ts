@@ -5,6 +5,7 @@ export type BrushType = 'add' | 'subtract' | 'move';
 export interface BrushParams {
   type: BrushType;
   center: [number, number, number];
+  prevCenter?: [number, number, number]; // previous frame position for capsule brush
   radius: number;
   strength: number;
   smoothing: number; // k parameter for smooth min/max

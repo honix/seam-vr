@@ -44,7 +44,8 @@ export class SculptInteraction {
       this.engine.stroke(pos);
     } else if (this.isSculpting) {
       this.isSculpting = false;
-      // Flush deferred boundary neighbor remeshes on trigger release
+      // Reset capsule brush state and flush deferred neighbor remeshes
+      this.engine.endStroke();
       this.engine.flushPendingRemesh();
     }
 

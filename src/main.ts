@@ -174,8 +174,13 @@ async function init() {
   // --- Clock for deltaTime ---
   const clock = new THREE.Clock();
 
+  // --- Frame timing ---
+  let frameCount = 0;
+  let frameTotalMs = 0;
+
   // --- Render Loop ---
   renderer.setAnimationLoop(() => {
+    const frameStart = performance.now();
     const deltaTime = clock.getDelta();
 
     // Update animation
@@ -210,7 +215,25 @@ async function init() {
     uiManager.update();
 
     // Render
+    const renderStart = performance.now();
     renderer.render(scene, camera);
+    const renderMs = performance.now() - renderStart;
+
+    // Log frame timing every 120 frames (~2 seconds)
+    const frameMs = performance.now() - frameStart;
+    frameTotalMs += frameMs;
+    frameCount++;
+    if (frameCount >= 120) {
+      const avg = frameTotalMs / frameCount;
+      const info = renderer.info;
+      console.log(
+        `[Frame] avg: ${avg.toFixed(1)}ms, render: ${renderMs.toFixed(1)}ms, ` +
+        `drawCalls: ${info.render.calls}, triangles: ${info.render.triangles}, ` +
+        `geometries: ${info.memory.geometries}, textures: ${info.memory.textures}`
+      );
+      frameCount = 0;
+      frameTotalMs = 0;
+    }
   });
 
   console.log('[Seam VR] Fully initialized');

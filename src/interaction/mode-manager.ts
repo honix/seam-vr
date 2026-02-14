@@ -1,6 +1,6 @@
 import { InteractionMode } from '../types';
 
-const MODE_ORDER: InteractionMode[] = ['handle', 'free-deform', 'play'];
+const MODE_ORDER: InteractionMode[] = ['handle', 'free-deform', 'sculpt', 'play'];
 
 export class ModeManager {
   currentMode: InteractionMode = 'handle';

@@ -55,4 +55,4 @@ export interface XRButtonState {
 }
 
 // Interaction modes
-export type InteractionMode = 'handle' | 'free-deform' | 'play';
+export type InteractionMode = 'handle' | 'free-deform' | 'sculpt' | 'play';

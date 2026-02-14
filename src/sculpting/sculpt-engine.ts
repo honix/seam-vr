@@ -1,14 +1,13 @@
 // Sculpt Engine - main coordinator for VR sculpting
 // Manages SDF volume, brush operations, mesh extraction, and Three.js rendering.
-// Selects GPU or CPU path based on WebGPU availability.
+// Uses WebGPU compute for brush application and marching cubes mesh extraction.
 
 import * as THREE from 'three';
 import { SDFVolume } from './sdf-volume';
 import { Chunk } from './chunk';
-import { applyBrush, MoveBrush } from './brush';
-import { extractMesh } from './marching-cubes';
+import { MoveBrush } from './brush';
 import { GPUCompute } from './gpu-compute';
-import type { BrushParams, BrushType, SculptConfig, MeshData } from './types';
+import type { BrushParams, BrushType, SculptConfig, MeshData, ChunkCoord } from './types';
 import { DEFAULT_SCULPT_CONFIG, chunkKey } from './types';
 
 interface ChunkMeshData {
@@ -22,7 +21,6 @@ export class SculptEngine {
 
   private scene: THREE.Scene;
   private gpu: GPUCompute;
-  private useGPU: boolean = false;
 
   // Three.js meshes per chunk
   private chunkMeshes: Map<string, ChunkMeshData> = new Map();
@@ -36,7 +34,7 @@ export class SculptEngine {
   private _brushSmoothing: number = 0.005;
 
   // Sculpt group in scene
-  private sculptGroup: THREE.Group;
+  sculptGroup: THREE.Group;
 
   constructor(scene: THREE.Scene, config: SculptConfig = DEFAULT_SCULPT_CONFIG) {
     this.scene = scene;
@@ -59,17 +57,19 @@ export class SculptEngine {
   }
 
   /**
-   * Try to initialize GPU compute. Call once at startup.
+   * Initialize GPU compute. Must be called before sculpting.
    */
   async initGPU(): Promise<boolean> {
-    this.useGPU = await this.gpu.init();
-    if (this.useGPU) {
+    const ok = await this.gpu.init();
+    if (ok) {
       console.log('[Sculpt] GPU compute enabled');
     } else {
-      console.log('[Sculpt] Using CPU fallback');
+      console.warn('[Sculpt] WebGPU not available — sculpting disabled');
     }
-    return this.useGPU;
+    return ok;
   }
+
+  get gpuReady(): boolean { return this.gpu.ready; }
 
   // --- Brush property accessors ---
 
@@ -87,12 +87,11 @@ export class SculptEngine {
 
   /**
    * Apply a sculpt stroke at the given world position.
-   * Used for add and subtract brushes.
+   * Batched: all brush dispatches in one GPU submission, all remeshes in another.
    */
-  async stroke(
-    worldPos: [number, number, number]
-  ): Promise<void> {
-    if (this._brushType === 'move') return; // Move uses beginMove/updateMove
+  async stroke(worldPos: [number, number, number]): Promise<void> {
+    if (this._brushType === 'move') return;
+    if (!this.gpu.ready) return;
 
     const brush: BrushParams = {
       type: this._brushType,
@@ -102,29 +101,22 @@ export class SculptEngine {
       smoothing: this._brushSmoothing,
     };
 
-    let modifiedChunks: Chunk[];
+    const coords = this.volume.chunksInSphere(
+      worldPos[0], worldPos[1], worldPos[2],
+      this._brushRadius + this._brushSmoothing
+    );
+    const modifiedChunks: Chunk[] = coords.map(c => this.volume.getOrCreateChunk(c));
 
-    if (this.useGPU) {
-      // GPU path: dispatch brush shader per affected chunk, then extract mesh
-      const coords = this.volume.chunksInSphere(
-        worldPos[0], worldPos[1], worldPos[2],
-        this._brushRadius + this._brushSmoothing
-      );
-      modifiedChunks = [];
-      for (const coord of coords) {
-        const chunk = this.volume.getOrCreateChunk(coord);
-        await this.gpu.applyBrush(chunk, brush);
-        chunk.dirty = true;
-        chunk.updateEmpty();
-        modifiedChunks.push(chunk);
-      }
-    } else {
-      // CPU path
-      modifiedChunks = applyBrush(this.volume, brush);
+    // Batch brush: single GPU submission, single fence
+    await this.gpu.applyBrushBatch(modifiedChunks, brush);
+
+    for (const chunk of modifiedChunks) {
+      chunk.dirty = true;
+      chunk.updateEmpty();
     }
 
-    // Remesh dirty chunks
-    await this.remeshChunks(modifiedChunks);
+    const extraChunks = this.volume.syncBoundaries(modifiedChunks);
+    await this.remeshChunks([...modifiedChunks, ...extraChunks]);
   }
 
   /**
@@ -132,9 +124,9 @@ export class SculptEngine {
    */
   beginMove(worldPos: [number, number, number]): void {
     this.moveBrush.beginMove(this.volume, worldPos, this._brushRadius);
-    // Remesh chunks affected by the erase
     const dirtyChunks = this.volume.dirtyChunks();
-    this.remeshChunks(dirtyChunks);
+    const extraChunks = this.volume.syncBoundaries(dirtyChunks);
+    this.remeshChunks([...dirtyChunks, ...extraChunks]);
   }
 
   /**
@@ -143,7 +135,8 @@ export class SculptEngine {
   async updateMove(worldPos: [number, number, number]): Promise<void> {
     if (!this.moveBrush.isActive) return;
     const modified = this.moveBrush.updateMove(this.volume, worldPos);
-    await this.remeshChunks(modified);
+    const extraChunks = this.volume.syncBoundaries(modified);
+    await this.remeshChunks([...modified, ...extraChunks]);
   }
 
   /**
@@ -154,25 +147,97 @@ export class SculptEngine {
   }
 
   /**
-   * Remesh a set of chunks (extract triangles and update Three.js meshes)
+   * Remesh chunks in a single batched GPU call.
+   * All buildPadded + marchingCubes dispatches in one submission.
    */
   private async remeshChunks(chunks: Chunk[]): Promise<void> {
+    const nonEmpty: Chunk[] = [];
     for (const chunk of chunks) {
       if (chunk.empty) {
         this.removeChunkMesh(chunkKey(chunk.coord));
-        continue;
-      }
-
-      let meshData: MeshData;
-      if (this.useGPU) {
-        meshData = await this.gpu.extractMesh(chunk);
       } else {
-        meshData = extractMesh(chunk, this.config);
+        nonEmpty.push(chunk);
       }
-
-      this.updateChunkMesh(chunkKey(chunk.coord), meshData);
-      chunk.dirty = false;
     }
+
+    if (nonEmpty.length === 0) return;
+
+    // Prepare all boundary slices (lightweight CPU reads)
+    const items = nonEmpty.map(chunk => ({
+      chunk,
+      boundarySlices: this.extractBoundarySlices(chunk.coord),
+    }));
+
+    // Batch GPU: all chunks in 2 submissions (counter + vertex readback)
+    const meshResults = await this.gpu.buildPaddedAndExtractBatch(items);
+
+    for (let i = 0; i < nonEmpty.length; i++) {
+      this.updateChunkMesh(chunkKey(nonEmpty[i].coord), meshResults[i]);
+      nonEmpty[i].dirty = false;
+    }
+  }
+
+  /**
+   * Extract 6 neighbor boundary slices for a chunk, packed into a single Float32Array.
+   * Each face is samples^2 floats. Total: 6 * samples^2 floats (~26KB at chunkSize=32).
+   * Missing neighbors are filled with emptyValue.
+   */
+  private extractBoundarySlices(coord: ChunkCoord): Float32Array {
+    const cs = this.config.chunkSize;
+    const samples = cs + 1;
+    const S2 = samples * samples;
+    const slices = new Float32Array(6 * S2);
+    slices.fill(this.config.emptyValue);
+
+    // -X face: neighbor at (x-1), take its ix=cs-1
+    const nxm = this.volume.getChunk({ x: coord.x - 1, y: coord.y, z: coord.z });
+    if (nxm) {
+      for (let iz = 0; iz < samples; iz++)
+        for (let iy = 0; iy < samples; iy++)
+          slices[0 * S2 + iz * samples + iy] = nxm.get(cs - 1, iy, iz);
+    }
+
+    // +X face: neighbor at (x+1), take its ix=1
+    const nxp = this.volume.getChunk({ x: coord.x + 1, y: coord.y, z: coord.z });
+    if (nxp) {
+      for (let iz = 0; iz < samples; iz++)
+        for (let iy = 0; iy < samples; iy++)
+          slices[1 * S2 + iz * samples + iy] = nxp.get(1, iy, iz);
+    }
+
+    // -Y face: neighbor at (y-1), take its iy=cs-1
+    const nym = this.volume.getChunk({ x: coord.x, y: coord.y - 1, z: coord.z });
+    if (nym) {
+      for (let iz = 0; iz < samples; iz++)
+        for (let ix = 0; ix < samples; ix++)
+          slices[2 * S2 + iz * samples + ix] = nym.get(ix, cs - 1, iz);
+    }
+
+    // +Y face: neighbor at (y+1), take its iy=1
+    const nyp = this.volume.getChunk({ x: coord.x, y: coord.y + 1, z: coord.z });
+    if (nyp) {
+      for (let iz = 0; iz < samples; iz++)
+        for (let ix = 0; ix < samples; ix++)
+          slices[3 * S2 + iz * samples + ix] = nyp.get(ix, 1, iz);
+    }
+
+    // -Z face: neighbor at (z-1), take its iz=cs-1
+    const nzm = this.volume.getChunk({ x: coord.x, y: coord.y, z: coord.z - 1 });
+    if (nzm) {
+      for (let iy = 0; iy < samples; iy++)
+        for (let ix = 0; ix < samples; ix++)
+          slices[4 * S2 + iy * samples + ix] = nzm.get(ix, iy, cs - 1);
+    }
+
+    // +Z face: neighbor at (z+1), take its iz=1
+    const nzp = this.volume.getChunk({ x: coord.x, y: coord.y, z: coord.z + 1 });
+    if (nzp) {
+      for (let iy = 0; iy < samples; iy++)
+        for (let ix = 0; ix < samples; ix++)
+          slices[5 * S2 + iy * samples + ix] = nzp.get(ix, iy, 1);
+    }
+
+    return slices;
   }
 
   /**
@@ -195,11 +260,13 @@ export class SculptEngine {
       this.chunkMeshes.set(key, chunkMesh);
     }
 
-    // Update geometry buffers
-    const geom = chunkMesh.mesh.geometry;
-    geom.setAttribute('position', new THREE.BufferAttribute(meshData.positions, 3));
-    geom.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
-    geom.computeBoundingSphere();
+    // SDF gradient normals are already smooth — no mergeVertices needed
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(meshData.positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
+    geometry.computeBoundingSphere();
+    chunkMesh.mesh.geometry.dispose();
+    chunkMesh.mesh.geometry = geometry;
     chunkMesh.vertexCount = meshData.vertexCount;
   }
 
@@ -213,9 +280,7 @@ export class SculptEngine {
       chunkMesh.mesh.geometry.dispose();
       this.chunkMeshes.delete(key);
     }
-    if (this.useGPU) {
-      this.gpu.releaseChunk(key);
-    }
+    this.gpu.releaseChunk(key);
   }
 
   /**

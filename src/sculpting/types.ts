@@ -34,6 +34,8 @@ export const DEFAULT_SCULPT_CONFIG: SculptConfig = {
 export interface MeshData {
   positions: Float32Array;
   normals: Float32Array;
+  /** GPU path: raw interleaved [x,y,z,nx,ny,nz,...] — skip de-interleave */
+  interleaved?: Float32Array;
   vertexCount: number;
 }
 

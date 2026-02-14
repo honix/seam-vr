@@ -36,6 +36,11 @@ export class SculptEngine {
   // Concurrent stroke guard — drop frames while GPU is busy
   private strokeInFlight = false;
 
+  // Deferred remesh: boundary neighbors queued for later processing.
+  // Modified chunks are remeshed immediately; neighbors only affect seam normals
+  // and can be deferred to next frame or trigger release.
+  private pendingRemesh: Map<string, Chunk> = new Map();
+
   // Sculpt group in scene
   sculptGroup: THREE.Group;
 
@@ -90,7 +95,8 @@ export class SculptEngine {
 
   /**
    * Apply a sculpt stroke at the given world position.
-   * Batched: all brush dispatches in one GPU submission, all remeshes in another.
+   * Only remeshes brush-modified chunks immediately (4-8 chunks, 1 GPU round).
+   * Boundary neighbors are deferred to avoid 20-30 chunk remesh spikes.
    */
   async stroke(worldPos: [number, number, number]): Promise<void> {
     if (this._brushType === 'move') return;
@@ -125,9 +131,16 @@ export class SculptEngine {
       }
 
       const extraChunks = this.volume.syncBoundaries(modifiedChunks);
-      const remeshList = [...modifiedChunks, ...extraChunks];
       const t3 = performance.now();
-      await this.remeshChunks(remeshList);
+
+      // Immediate: remesh only brush-modified chunks (4-8, fits in 1 GPU round)
+      await this.remeshChunks(modifiedChunks);
+
+      // Defer: queue boundary neighbors (they only affect seam normals)
+      for (const c of extraChunks) {
+        this.pendingRemesh.set(chunkKey(c.coord), c);
+      }
+
       const t4 = performance.now();
 
       const total = t4 - t0;
@@ -135,9 +148,33 @@ export class SculptEngine {
         console.log(
           `[Stroke] ${total.toFixed(1)}ms total | ` +
           `brush: ${(t2 - t1).toFixed(1)}ms (${modifiedChunks.length} chunks) | ` +
-          `remesh: ${(t4 - t3).toFixed(1)}ms (${remeshList.length} chunks) | ` +
-          `sync: ${(t3 - t2).toFixed(1)}ms`
+          `remesh: ${(t4 - t3).toFixed(1)}ms (${modifiedChunks.length} imm) | ` +
+          `deferred: ${this.pendingRemesh.size} pending`
         );
+      }
+    } finally {
+      this.strokeInFlight = false;
+    }
+  }
+
+  /**
+   * Flush all pending boundary neighbor remeshes.
+   * Called when trigger is released (end of sculpt stroke).
+   * Latency is acceptable here since user isn't actively painting.
+   */
+  async flushPendingRemesh(): Promise<void> {
+    if (this.pendingRemesh.size === 0) return;
+    if (!this.gpu.ready || this.strokeInFlight) return;
+
+    this.strokeInFlight = true;
+    try {
+      const chunks = [...this.pendingRemesh.values()];
+      this.pendingRemesh.clear();
+      const t0 = performance.now();
+      await this.remeshChunks(chunks);
+      const t1 = performance.now();
+      if (t1 - t0 > 2) {
+        console.log(`[Flush] ${(t1 - t0).toFixed(1)}ms (${chunks.length} deferred chunks)`);
       }
     } finally {
       this.strokeInFlight = false;
@@ -285,10 +322,17 @@ export class SculptEngine {
       this.chunkMeshes.set(key, chunkMesh);
     }
 
-    // Update geometry attributes — reuse BufferGeometry, replace attributes
     const geometry = chunkMesh.mesh.geometry;
-    geometry.setAttribute('position', new THREE.BufferAttribute(meshData.positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
+    if (meshData.interleaved) {
+      // GPU path: use InterleavedBuffer directly (zero de-interleave)
+      const ib = new THREE.InterleavedBuffer(meshData.interleaved, 6);
+      geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(ib, 3, 0));
+      geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(ib, 3, 3));
+    } else {
+      // CPU fallback path
+      geometry.setAttribute('position', new THREE.BufferAttribute(meshData.positions, 3));
+      geometry.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
+    }
     geometry.computeBoundingSphere();
     chunkMesh.vertexCount = meshData.vertexCount;
   }

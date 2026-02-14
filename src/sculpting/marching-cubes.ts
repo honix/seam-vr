@@ -21,8 +21,25 @@ function interpolateEdge(
   return [
     v1[0] + t * (v2[0] - v1[0]),
     v1[1] + t * (v2[1] - v1[1]),
-    v1[2] + t * (v2[2] - v2[2]),
+    v1[2] + t * (v2[2] - v1[2]),
   ];
+}
+
+/** Get SDF value from padded buffer or chunk */
+function getSDF(
+  ix: number, iy: number, iz: number,
+  chunk: Chunk,
+  paddedSDF?: Float32Array,
+  paddedStride?: number
+): number {
+  if (paddedSDF && paddedStride) {
+    // Padded buffer: offset by 1 for padding
+    const px = ix + 1;
+    const py = iy + 1;
+    const pz = iz + 1;
+    return paddedSDF[pz * paddedStride * paddedStride + py * paddedStride + px];
+  }
+  return chunk.get(ix, iy, iz);
 }
 
 /** Compute SDF gradient (normal) via central differences */
@@ -30,8 +47,26 @@ function computeNormal(
   chunk: Chunk,
   ix: number,
   iy: number,
-  iz: number
+  iz: number,
+  paddedSDF?: Float32Array,
+  paddedStride?: number
 ): [number, number, number] {
+  if (paddedSDF && paddedStride) {
+    // Use padded buffer for seamless cross-chunk normals
+    const px = ix + 1;
+    const py = iy + 1;
+    const pz = iz + 1;
+    const ps = paddedStride;
+    const nx = paddedSDF[pz * ps * ps + py * ps + (px + 1)] - paddedSDF[pz * ps * ps + py * ps + (px - 1)];
+    const ny = paddedSDF[pz * ps * ps + (py + 1) * ps + px] - paddedSDF[pz * ps * ps + (py - 1) * ps + px];
+    const nz = paddedSDF[(pz + 1) * ps * ps + py * ps + px] - paddedSDF[(pz - 1) * ps * ps + py * ps + px];
+
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (len < 1e-10) return [0, 1, 0];
+    return [nx / len, ny / len, nz / len];
+  }
+
+  // Fallback: chunk-local with clamped boundaries
   const s = chunk.samples;
   const x0 = ix > 0 ? ix - 1 : ix;
   const x1 = ix < s - 1 ? ix + 1 : ix;
@@ -55,11 +90,13 @@ function interpolateNormal(
   ix1: number, iy1: number, iz1: number,
   ix2: number, iy2: number, iz2: number,
   val1: number, val2: number,
-  isoLevel: number
+  isoLevel: number,
+  paddedSDF?: Float32Array,
+  paddedStride?: number
 ): [number, number, number] {
   const t = Math.abs(val2 - val1) < 1e-10 ? 0.5 : (isoLevel - val1) / (val2 - val1);
-  const n1 = computeNormal(chunk, ix1, iy1, iz1);
-  const n2 = computeNormal(chunk, ix2, iy2, iz2);
+  const n1 = computeNormal(chunk, ix1, iy1, iz1, paddedSDF, paddedStride);
+  const n2 = computeNormal(chunk, ix2, iy2, iz2, paddedSDF, paddedStride);
 
   const nx = n1[0] + t * (n2[0] - n1[0]);
   const ny = n1[1] + t * (n2[1] - n1[1]);
@@ -77,13 +114,15 @@ function interpolateNormal(
 export function extractMesh(
   chunk: Chunk,
   config: SculptConfig,
-  isoLevel: number = 0
+  isoLevel: number = 0,
+  paddedSDF?: Float32Array
 ): MeshData {
   const cs = config.chunkSize;
   const vs = config.voxelSize;
   const originX = chunk.coord.x * cs * vs;
   const originY = chunk.coord.y * cs * vs;
   const originZ = chunk.coord.z * cs * vs;
+  const paddedStride = paddedSDF ? cs + 3 : undefined;
 
   // Pre-allocate generous arrays (will trim at end)
   // Max theoretical: cs^3 cells * 5 triangles * 3 vertices = 15 * cs^3
@@ -115,7 +154,7 @@ export function extractMesh(
         const cornerValues: number[] = new Array(8);
         for (let i = 0; i < 8; i++) {
           const [dx, dy, dz] = CUBE_VERTICES[i];
-          cornerValues[i] = chunk.get(x + dx, y + dy, z + dz);
+          cornerValues[i] = getSDF(x + dx, y + dy, z + dz, chunk, paddedSDF, paddedStride);
         }
 
         // Compute cube index from corner signs
@@ -154,7 +193,8 @@ export function extractMesh(
           edgePos[e] = interpolateEdge(p1, p2, cornerValues[v1], cornerValues[v2], isoLevel);
           edgeNorm[e] = interpolateNormal(
             chunk, ix1, iy1, iz1, ix2, iy2, iz2,
-            cornerValues[v1], cornerValues[v2], isoLevel
+            cornerValues[v1], cornerValues[v2], isoLevel,
+            paddedSDF, paddedStride
           );
         }
 

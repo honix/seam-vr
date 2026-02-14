@@ -44,6 +44,8 @@ export class SculptInteraction {
       this.engine.stroke(pos);
     } else if (this.isSculpting) {
       this.isSculpting = false;
+      // Flush deferred boundary neighbor remeshes on trigger release
+      this.engine.flushPendingRemesh();
     }
 
     // Grip: move brush

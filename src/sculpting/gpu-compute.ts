@@ -16,7 +16,9 @@ interface ChunkGPUData {
 }
 
 // Max chunks per GPU round (pool slots). Overflow handled by multi-round.
-const MAX_BATCH = 4;
+// Sized for: 8 brush chunks + 12 remesh chunks (8 modified + 4 boundary neighbors).
+// Memory: 12 × ~5MB = ~60MB total (vertex buffers are 2.3MB each, not 11.8MB).
+const MAX_BATCH = 12;
 
 // Realistic max vertices per chunk. Theoretical max is cs^3*15 (491K),
 // but real sculpt surfaces rarely exceed 30% cell fill = ~100K vertices.
@@ -394,7 +396,6 @@ export class GPUCompute {
       for (let i = 0; i < n; i++) {
         const rawCount = new Uint32Array(this.counterReadbackBuffers[i].getMappedRange())[0];
         this.counterReadbackBuffers[i].unmap();
-        // Clamp to buffer capacity (MC shader may exceed if surface is dense)
         const vc = Math.min(rawCount, MAX_VERTICES_PER_CHUNK);
 
         if (vc === 0) {
@@ -403,23 +404,13 @@ export class GPUCompute {
           continue;
         }
 
+        // Copy interleaved data directly — no de-interleave.
+        // getMappedRange is a shared view, so we must copy before unmap.
         const fullRange = this.vertexReadbackBuffers[i].getMappedRange();
-        const vertexData = new Float32Array(fullRange, 0, vc * 6);
-
-        const positions = new Float32Array(vc * 3);
-        const normals = new Float32Array(vc * 3);
-        for (let v = 0; v < vc; v++) {
-          const s = v * 6;
-          const d = v * 3;
-          positions[d] = vertexData[s];
-          positions[d + 1] = vertexData[s + 1];
-          positions[d + 2] = vertexData[s + 2];
-          normals[d] = vertexData[s + 3];
-          normals[d + 1] = vertexData[s + 4];
-          normals[d + 2] = vertexData[s + 5];
-        }
+        const interleaved = new Float32Array(vc * 6);
+        interleaved.set(new Float32Array(fullRange, 0, vc * 6));
         this.vertexReadbackBuffers[i].unmap();
-        results.push({ positions, normals, vertexCount: vc });
+        results.push({ positions: new Float32Array(0), normals: new Float32Array(0), interleaved, vertexCount: vc });
       }
     }
 

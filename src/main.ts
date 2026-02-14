@@ -149,6 +149,9 @@ async function init() {
 
   // --- Test Harness ---
   initTestHarness(commandBus, sceneGraph);
+  window.__seam.sculptEngine = sculptEngine;
+  window.__seam.modeManager = modeManager;
+  window.__seam.camera = camera;
 
   // Wire emulator commands through the test harness
   const origExec = commandBus.exec.bind(commandBus);

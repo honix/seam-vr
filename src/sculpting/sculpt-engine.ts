@@ -33,6 +33,9 @@ export class SculptEngine {
   private _brushStrength: number = 1.0;
   private _brushSmoothing: number = 0.005;
 
+  // Concurrent stroke guard — drop frames while GPU is busy
+  private strokeInFlight = false;
+
   // Sculpt group in scene
   sculptGroup: THREE.Group;
 
@@ -92,31 +95,38 @@ export class SculptEngine {
   async stroke(worldPos: [number, number, number]): Promise<void> {
     if (this._brushType === 'move') return;
     if (!this.gpu.ready) return;
+    // Drop frame if previous stroke still running on GPU
+    if (this.strokeInFlight) return;
 
-    const brush: BrushParams = {
-      type: this._brushType,
-      center: worldPos,
-      radius: this._brushRadius,
-      strength: this._brushStrength,
-      smoothing: this._brushSmoothing,
-    };
+    this.strokeInFlight = true;
+    try {
+      const brush: BrushParams = {
+        type: this._brushType,
+        center: worldPos,
+        radius: this._brushRadius,
+        strength: this._brushStrength,
+        smoothing: this._brushSmoothing,
+      };
 
-    const coords = this.volume.chunksInSphere(
-      worldPos[0], worldPos[1], worldPos[2],
-      this._brushRadius + this._brushSmoothing
-    );
-    const modifiedChunks: Chunk[] = coords.map(c => this.volume.getOrCreateChunk(c));
+      const coords = this.volume.chunksInSphere(
+        worldPos[0], worldPos[1], worldPos[2],
+        this._brushRadius + this._brushSmoothing
+      );
+      const modifiedChunks: Chunk[] = coords.map(c => this.volume.getOrCreateChunk(c));
 
-    // Batch brush: single GPU submission, single fence
-    await this.gpu.applyBrushBatch(modifiedChunks, brush);
+      // Batch brush: single GPU submission, single fence
+      await this.gpu.applyBrushBatch(modifiedChunks, brush);
 
-    for (const chunk of modifiedChunks) {
-      chunk.dirty = true;
-      chunk.updateEmpty();
+      for (const chunk of modifiedChunks) {
+        chunk.dirty = true;
+        chunk.updateEmpty();
+      }
+
+      const extraChunks = this.volume.syncBoundaries(modifiedChunks);
+      await this.remeshChunks([...modifiedChunks, ...extraChunks]);
+    } finally {
+      this.strokeInFlight = false;
     }
-
-    const extraChunks = this.volume.syncBoundaries(modifiedChunks);
-    await this.remeshChunks([...modifiedChunks, ...extraChunks]);
   }
 
   /**
@@ -168,7 +178,7 @@ export class SculptEngine {
       boundarySlices: this.extractBoundarySlices(chunk.coord),
     }));
 
-    // Batch GPU: all chunks in 2 submissions (counter + vertex readback)
+    // Batch GPU: single submission, single fence
     const meshResults = await this.gpu.buildPaddedAndExtractBatch(items);
 
     for (let i = 0; i < nonEmpty.length; i++) {
@@ -260,13 +270,11 @@ export class SculptEngine {
       this.chunkMeshes.set(key, chunkMesh);
     }
 
-    // SDF gradient normals are already smooth — no mergeVertices needed
-    const geometry = new THREE.BufferGeometry();
+    // Update geometry attributes — reuse BufferGeometry, replace attributes
+    const geometry = chunkMesh.mesh.geometry;
     geometry.setAttribute('position', new THREE.BufferAttribute(meshData.positions, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
     geometry.computeBoundingSphere();
-    chunkMesh.mesh.geometry.dispose();
-    chunkMesh.mesh.geometry = geometry;
     chunkMesh.vertexCount = meshData.vertexCount;
   }
 

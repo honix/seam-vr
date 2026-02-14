@@ -10,14 +10,8 @@ export class SculptInteraction {
   private isSculpting: boolean = false;
   private isMoving: boolean = false;
 
-  // Track last stroke position to avoid redundant strokes at same position
-  private lastStrokePos: [number, number, number] | null = null;
-  private minStrokeDistance: number; // minimum distance between strokes
-
   constructor(engine: SculptEngine) {
     this.engine = engine;
-    // Stroke at minimum every half brush radius
-    this.minStrokeDistance = engine.brushRadius * 0.5;
   }
 
   /**
@@ -42,25 +36,14 @@ export class SculptInteraction {
     if (Math.abs(left.thumbstick.y) > 0.2) {
       const delta = left.thumbstick.y * 0.0005;
       this.engine.brushRadius = this.engine.brushRadius + delta;
-      this.minStrokeDistance = this.engine.brushRadius * 0.5;
     }
 
-    // Trigger: add/subtract sculpting
+    // Trigger: add/subtract sculpting — apply every frame for smooth strokes
     if (right.trigger.pressed && this.engine.brushType !== 'move') {
-      if (!this.isSculpting) {
-        // Start new stroke
-        this.isSculpting = true;
-        this.lastStrokePos = null;
-      }
-
-      // Only stroke if moved enough distance
-      if (this.shouldStroke(pos)) {
-        this.engine.stroke(pos);
-        this.lastStrokePos = pos;
-      }
+      this.isSculpting = true;
+      this.engine.stroke(pos);
     } else if (this.isSculpting) {
       this.isSculpting = false;
-      this.lastStrokePos = null;
     }
 
     // Grip: move brush
@@ -75,14 +58,6 @@ export class SculptInteraction {
       this.isMoving = false;
       this.engine.endMove();
     }
-  }
-
-  private shouldStroke(pos: [number, number, number]): boolean {
-    if (!this.lastStrokePos) return true;
-    const dx = pos[0] - this.lastStrokePos[0];
-    const dy = pos[1] - this.lastStrokePos[1];
-    const dz = pos[2] - this.lastStrokePos[2];
-    return Math.sqrt(dx * dx + dy * dy + dz * dz) >= this.minStrokeDistance;
   }
 
   private cycleBrushType(): void {

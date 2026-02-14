@@ -2,6 +2,9 @@
 // Extracts triangle mesh from SDF volume data.
 // Each thread processes one cell (defined by 8 corner samples).
 // Outputs vertices with positions and normals using atomic append.
+//
+// SDF buffer is padded with 1 extra sample on each face (from neighbor chunks)
+// so gradient/normal computation at chunk boundaries is seamless.
 
 struct MCUniforms {
   chunk_origin: vec3<f32>,  // World-space origin of this chunk
@@ -9,7 +12,7 @@ struct MCUniforms {
   cells_per_axis: u32,      // Number of cells per axis (chunkSize)
   samples_per_axis: u32,    // cells_per_axis + 1
   iso_level: f32,           // Iso-surface threshold (typically 0)
-  _pad: u32,
+  sdf_stride: u32,          // Stride for padded SDF buffer (samples_per_axis + 2)
 }
 
 struct Vertex {
@@ -40,25 +43,29 @@ const CUBE_CORNERS = array<vec3<u32>, 8>(
 const EDGE_A = array<u32, 12>(0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 0u, 1u, 2u, 3u);
 const EDGE_B = array<u32, 12>(1u, 2u, 3u, 0u, 5u, 6u, 7u, 4u, 4u, 5u, 6u, 7u);
 
-// Get SDF value at sample position
-fn get_sdf(ix: u32, iy: u32, iz: u32) -> f32 {
-  let s = uniforms.samples_per_axis;
-  return sdf_data[iz * s * s + iy * s + ix];
+// Access the padded SDF buffer directly using padded coordinates
+fn get_sdf_padded(px: u32, py: u32, pz: u32) -> f32 {
+  let s = uniforms.sdf_stride;
+  return sdf_data[pz * s * s + py * s + px];
 }
 
-// Compute gradient (normal) via central differences
-fn compute_gradient(ix: u32, iy: u32, iz: u32) -> vec3<f32> {
-  let s = uniforms.samples_per_axis;
-  let x0 = select(ix - 1u, 0u, ix == 0u);
-  let x1 = select(ix + 1u, s - 1u, ix >= s - 1u);
-  let y0 = select(iy - 1u, 0u, iy == 0u);
-  let y1 = select(iy + 1u, s - 1u, iy >= s - 1u);
-  let z0 = select(iz - 1u, 0u, iz == 0u);
-  let z1 = select(iz + 1u, s - 1u, iz >= s - 1u);
+// Get SDF value at chunk-local sample coordinates (0-based)
+// Adds +1 offset to index into the padded buffer
+fn get_sdf(ix: u32, iy: u32, iz: u32) -> f32 {
+  return get_sdf_padded(ix + 1u, iy + 1u, iz + 1u);
+}
 
-  let gx = get_sdf(x1, iy, iz) - get_sdf(x0, iy, iz);
-  let gy = get_sdf(ix, y1, iz) - get_sdf(ix, y0, iz);
-  let gz = get_sdf(ix, iy, z1) - get_sdf(ix, iy, z0);
+// Compute gradient (normal) via central differences using padded buffer
+// No clamping needed — padding guarantees valid neighbors on all sides
+fn compute_gradient(ix: u32, iy: u32, iz: u32) -> vec3<f32> {
+  // Padded coordinates for this sample
+  let px = ix + 1u;
+  let py = iy + 1u;
+  let pz = iz + 1u;
+
+  let gx = get_sdf_padded(px + 1u, py, pz) - get_sdf_padded(px - 1u, py, pz);
+  let gy = get_sdf_padded(px, py + 1u, pz) - get_sdf_padded(px, py - 1u, pz);
+  let gz = get_sdf_padded(px, py, pz + 1u) - get_sdf_padded(px, py, pz - 1u);
 
   let grad = vec3<f32>(gx, gy, gz);
   let len = length(grad);

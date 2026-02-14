@@ -1,9 +1,7 @@
 // WebGPU Compute Pipeline for SDF sculpting
-// Batched GPU operations — all chunks processed in minimal submissions:
-//   Fence 1: brush dispatches + SDF readbacks (all chunks)
-//   Fence 2: buildPadded + marchingCubes + counter readbacks (all chunks)
-//   Fence 3: vertex data readbacks (all non-empty chunks)
-// Total: 3 GPU fences per stroke regardless of chunk count.
+// Optimized: pre-allocated buffer pools, 2 GPU fences per stroke.
+//   Fence 1: brush dispatches + SDF readbacks
+//   Fence 2: buildPadded + marchingCubes + vertex readbacks (fixed-size)
 
 import type { Chunk } from './chunk';
 import type { BrushParams, SculptConfig, MeshData } from './types';
@@ -15,8 +13,10 @@ import buildPaddedShader from '../shaders/build-padded.compute.wgsl?raw';
 
 interface ChunkGPUData {
   sdfBuffer: GPUBuffer;
-  needsUpload: boolean;
 }
+
+// Max chunks we'll ever process in one stroke
+const MAX_BATCH = 8;
 
 export class GPUCompute {
   private device: GPUDevice | null = null;
@@ -31,6 +31,27 @@ export class GPUCompute {
   // Per-chunk GPU buffers (persist across frames)
   private chunkBuffers: Map<string, ChunkGPUData> = new Map();
 
+  // --- Pre-allocated buffer pools (reused every frame) ---
+  // Brush phase
+  private brushUniformBuffers: GPUBuffer[] = [];
+  private sdfReadbackBuffers: GPUBuffer[] = [];
+
+  // Remesh phase
+  private sliceBuffers: GPUBuffer[] = [];
+  private paddedBuffers: GPUBuffer[] = [];
+  private bpUniformBuffers: GPUBuffer[] = [];
+  private mcUniformBuffers: GPUBuffer[] = [];
+  private vertexBuffers: GPUBuffer[] = [];
+  private counterBuffers: GPUBuffer[] = [];
+  private vertexReadbackBuffers: GPUBuffer[] = [];
+  private counterReadbackBuffers: GPUBuffer[] = [];
+
+  // Sizes cached from config
+  private sdfSize = 0;
+  private sliceSize = 0;
+  private paddedSize = 0;
+  private vertexBufferSize = 0;
+
   private config: SculptConfig;
   private _ready: boolean = false;
 
@@ -42,10 +63,6 @@ export class GPUCompute {
     return this._ready;
   }
 
-  /**
-   * Initialize WebGPU device and compile shaders.
-   * Returns false if WebGPU is unavailable.
-   */
   async init(): Promise<boolean> {
     if (!navigator.gpu) return false;
 
@@ -62,11 +79,12 @@ export class GPUCompute {
 
       this.createLookupTableBuffers();
       await this.createPipelines();
+      this.preAllocateBufferPools();
 
       this._ready = true;
       return true;
     } catch {
-      console.warn('[SculptGPU] WebGPU initialization failed, using CPU fallback');
+      console.warn('[SculptGPU] WebGPU initialization failed');
       return false;
     }
   }
@@ -111,6 +129,85 @@ export class GPUCompute {
     });
   }
 
+  /**
+   * Pre-allocate all reusable GPU buffers at init time.
+   * Eliminates per-frame allocation overhead (~20 createBuffer/destroy calls per stroke).
+   */
+  private preAllocateBufferPools(): void {
+    if (!this.device) return;
+
+    const cs = this.config.chunkSize;
+    const samples = cs + 1;
+    const padded = samples + 2;
+
+    this.sdfSize = samples * samples * samples * 4;
+    this.sliceSize = 6 * samples * samples * 4;
+    this.paddedSize = padded * padded * padded * 4;
+    this.vertexBufferSize = cs * cs * cs * 15 * 6 * 4;
+
+    for (let i = 0; i < MAX_BATCH; i++) {
+      // Brush uniforms (64 bytes)
+      this.brushUniformBuffers.push(this.device.createBuffer({
+        size: 64,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      }));
+
+      // SDF readback
+      this.sdfReadbackBuffers.push(this.device.createBuffer({
+        size: this.sdfSize,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      }));
+
+      // Slice buffers (26KB each)
+      this.sliceBuffers.push(this.device.createBuffer({
+        size: this.sliceSize,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      }));
+
+      // Padded buffers (172KB each, GPU-only)
+      this.paddedBuffers.push(this.device.createBuffer({
+        size: this.paddedSize,
+        usage: GPUBufferUsage.STORAGE,
+      }));
+
+      // BuildPadded uniforms (16 bytes)
+      this.bpUniformBuffers.push(this.device.createBuffer({
+        size: 16,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      }));
+
+      // MC uniforms (32 bytes)
+      this.mcUniformBuffers.push(this.device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      }));
+
+      // Vertex output (11.8MB each)
+      this.vertexBuffers.push(this.device.createBuffer({
+        size: this.vertexBufferSize,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      }));
+
+      // Counter (4 bytes)
+      this.counterBuffers.push(this.device.createBuffer({
+        size: 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+      }));
+
+      // Vertex readback (same max size as vertex buffer)
+      this.vertexReadbackBuffers.push(this.device.createBuffer({
+        size: this.vertexBufferSize,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      }));
+
+      // Counter readback (4 bytes)
+      this.counterReadbackBuffers.push(this.device.createBuffer({
+        size: 4,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      }));
+    }
+  }
+
   private getChunkBuffer(chunk: Chunk, key: string): ChunkGPUData {
     let gpuData = this.chunkBuffers.get(key);
     if (!gpuData) {
@@ -118,15 +215,14 @@ export class GPUCompute {
         size: chunk.data.byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
       });
-      gpuData = { sdfBuffer: buffer, needsUpload: true };
+      gpuData = { sdfBuffer: buffer };
       this.chunkBuffers.set(key, gpuData);
     }
     return gpuData;
   }
 
   /**
-   * Apply brush to all chunks in a single GPU submission.
-   * One fence for all readbacks instead of one fence per chunk.
+   * Apply brush to all chunks. Processes in rounds of MAX_BATCH.
    */
   async applyBrushBatch(chunks: Chunk[], brush: BrushParams): Promise<void> {
     if (!this.device || !this.brushPipeline || chunks.length === 0) return;
@@ -136,86 +232,62 @@ export class GPUCompute {
     const samples = cs + 1;
     const workgroups = Math.ceil(samples / 4);
 
-    const encoder = this.device.createCommandEncoder();
-    const readbacks: GPUBuffer[] = [];
-    const tempBuffers: GPUBuffer[] = [];
+    for (let offset = 0; offset < chunks.length; offset += MAX_BATCH) {
+      const n = Math.min(MAX_BATCH, chunks.length - offset);
+      const encoder = this.device.createCommandEncoder();
 
-    for (const chunk of chunks) {
-      const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
-      const gpuData = this.getChunkBuffer(chunk, key);
+      for (let i = 0; i < n; i++) {
+        const chunk = chunks[offset + i];
+        const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
+        const gpuData = this.getChunkBuffer(chunk, key);
 
-      // Upload current SDF
-      this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+        this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
 
-      // Brush uniforms
-      const uniformData = new ArrayBuffer(64);
-      const f32 = new Float32Array(uniformData);
-      const u32 = new Uint32Array(uniformData);
-      f32[0] = brush.center[0];
-      f32[1] = brush.center[1];
-      f32[2] = brush.center[2];
-      f32[3] = brush.radius;
-      f32[4] = brush.strength;
-      f32[5] = brush.smoothing;
-      u32[6] = brush.type === 'add' ? 0 : 1;
-      f32[7] = 0;
-      f32[8] = chunk.coord.x * cs * vs;
-      f32[9] = chunk.coord.y * cs * vs;
-      f32[10] = chunk.coord.z * cs * vs;
-      f32[11] = vs;
-      u32[12] = samples;
-      u32[13] = 0;
+        const uniformData = new ArrayBuffer(64);
+        const f32 = new Float32Array(uniformData);
+        const u32 = new Uint32Array(uniformData);
+        f32[0] = brush.center[0]; f32[1] = brush.center[1]; f32[2] = brush.center[2];
+        f32[3] = brush.radius; f32[4] = brush.strength; f32[5] = brush.smoothing;
+        u32[6] = brush.type === 'add' ? 0 : 1; f32[7] = 0;
+        f32[8] = chunk.coord.x * cs * vs; f32[9] = chunk.coord.y * cs * vs;
+        f32[10] = chunk.coord.z * cs * vs; f32[11] = vs;
+        u32[12] = samples; u32[13] = 0;
 
-      const uniformBuffer = this.device.createBuffer({
-        size: 64,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      this.device.queue.writeBuffer(uniformBuffer, 0, new Float32Array(uniformData));
-      tempBuffers.push(uniformBuffer);
+        this.device.queue.writeBuffer(this.brushUniformBuffers[i], 0, new Float32Array(uniformData));
 
-      // Dispatch brush compute
-      const bindGroup = this.device.createBindGroup({
-        layout: this.brushPipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: uniformBuffer } },
-          { binding: 1, resource: { buffer: gpuData.sdfBuffer } },
-        ],
-      });
+        const bindGroup = this.device.createBindGroup({
+          layout: this.brushPipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: this.brushUniformBuffers[i] } },
+            { binding: 1, resource: { buffer: gpuData.sdfBuffer } },
+          ],
+        });
 
-      const pass = encoder.beginComputePass();
-      pass.setPipeline(this.brushPipeline);
-      pass.setBindGroup(0, bindGroup);
-      pass.dispatchWorkgroups(workgroups, workgroups, workgroups);
-      pass.end();
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(this.brushPipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(workgroups, workgroups, workgroups);
+        pass.end();
 
-      // Stage readback
-      const readbackBuffer = this.device.createBuffer({
-        size: chunk.data.byteLength,
-        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-      });
-      encoder.copyBufferToBuffer(gpuData.sdfBuffer, 0, readbackBuffer, 0, chunk.data.byteLength);
-      readbacks.push(readbackBuffer);
+        encoder.copyBufferToBuffer(gpuData.sdfBuffer, 0, this.sdfReadbackBuffers[i], 0, this.sdfSize);
+      }
+
+      this.device.queue.submit([encoder.finish()]);
+      await Promise.all(
+        Array.from({ length: n }, (_, i) => this.sdfReadbackBuffers[i].mapAsync(GPUMapMode.READ))
+      );
+
+      for (let i = 0; i < n; i++) {
+        const result = new Float32Array(this.sdfReadbackBuffers[i].getMappedRange());
+        chunks[offset + i].data.set(result);
+        this.sdfReadbackBuffers[i].unmap();
+      }
     }
-
-    // --- Single submit, single fence ---
-    this.device.queue.submit([encoder.finish()]);
-    await Promise.all(readbacks.map(b => b.mapAsync(GPUMapMode.READ)));
-
-    // Copy all results back to CPU
-    for (let i = 0; i < chunks.length; i++) {
-      const result = new Float32Array(readbacks[i].getMappedRange());
-      chunks[i].data.set(result);
-      readbacks[i].unmap();
-      readbacks[i].destroy();
-    }
-
-    for (const buf of tempBuffers) buf.destroy();
   }
 
   /**
-   * Build padded buffers + extract meshes for all chunks in two GPU submissions.
-   * Fence 1: all compute work + counter readbacks.
-   * Fence 2: vertex data readbacks (sizes known from counters).
+   * Build padded + extract mesh for all chunks. Processes in rounds of MAX_BATCH.
+   * Each round: single GPU submission + single fence.
    */
   async buildPaddedAndExtractBatch(
     items: { chunk: Chunk; boundarySlices: Float32Array }[]
@@ -231,201 +303,122 @@ export class GPUCompute {
     const padded = samples + 2;
     const bpWorkgroups = Math.ceil(padded / 4);
     const mcWorkgroups = Math.ceil(cs / 4);
-    const maxVertices = cs * cs * cs * 15;
-    const vertexBufferSize = maxVertices * 6 * 4;
 
-    const encoder = this.device.createCommandEncoder();
-    const tempBuffers: GPUBuffer[] = [];
-    const perChunk: { vertexBuffer: GPUBuffer; counterBuffer: GPUBuffer }[] = [];
+    const results: MeshData[] = [];
 
-    for (const { chunk, boundarySlices } of items) {
-      const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
-      const gpuData = this.getChunkBuffer(chunk, key);
+    for (let offset = 0; offset < items.length; offset += MAX_BATCH) {
+      const n = Math.min(MAX_BATCH, items.length - offset);
+      const encoder = this.device.createCommandEncoder();
 
-      // Upload SDF (may be stale after CPU syncBoundaries)
-      this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+      for (let i = 0; i < n; i++) {
+        const { chunk, boundarySlices } = items[offset + i];
+        const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
+        const gpuData = this.getChunkBuffer(chunk, key);
 
-      // Upload boundary slices
-      const sliceBuffer = this.device.createBuffer({
-        size: boundarySlices.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      });
-      this.device.queue.writeBuffer(sliceBuffer, 0, boundarySlices.buffer, boundarySlices.byteOffset, boundarySlices.byteLength);
-      tempBuffers.push(sliceBuffer);
+        this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+        this.device.queue.writeBuffer(this.sliceBuffers[i], 0, boundarySlices.buffer, boundarySlices.byteOffset, boundarySlices.byteLength);
 
-      // Padded output buffer (GPU-only)
-      const paddedBuffer = this.device.createBuffer({
-        size: padded * padded * padded * 4,
-        usage: GPUBufferUsage.STORAGE,
-      });
-      tempBuffers.push(paddedBuffer);
+        // BuildPadded uniforms
+        const bpUniData = new ArrayBuffer(16);
+        new Uint32Array(bpUniData, 0, 1)[0] = samples;
+        new Float32Array(bpUniData, 4, 1)[0] = this.config.emptyValue;
+        this.device.queue.writeBuffer(this.bpUniformBuffers[i], 0, new Uint8Array(bpUniData));
 
-      // --- BuildPadded ---
-      const bpUniData = new ArrayBuffer(16);
-      new Uint32Array(bpUniData, 0, 1)[0] = samples;
-      new Float32Array(bpUniData, 4, 1)[0] = this.config.emptyValue;
-      const bpUniBuf = this.device.createBuffer({
-        size: 16,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      this.device.queue.writeBuffer(bpUniBuf, 0, new Uint8Array(bpUniData));
-      tempBuffers.push(bpUniBuf);
+        const bpBG = this.device.createBindGroup({
+          layout: this.buildPaddedPipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: this.bpUniformBuffers[i] } },
+            { binding: 1, resource: { buffer: gpuData.sdfBuffer } },
+            { binding: 2, resource: { buffer: this.sliceBuffers[i] } },
+            { binding: 3, resource: { buffer: this.paddedBuffers[i] } },
+          ],
+        });
 
-      const bpBG = this.device.createBindGroup({
-        layout: this.buildPaddedPipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: bpUniBuf } },
-          { binding: 1, resource: { buffer: gpuData.sdfBuffer } },
-          { binding: 2, resource: { buffer: sliceBuffer } },
-          { binding: 3, resource: { buffer: paddedBuffer } },
-        ],
-      });
+        const bpPass = encoder.beginComputePass();
+        bpPass.setPipeline(this.buildPaddedPipeline);
+        bpPass.setBindGroup(0, bpBG);
+        bpPass.dispatchWorkgroups(bpWorkgroups, bpWorkgroups, bpWorkgroups);
+        bpPass.end();
 
-      const bpPass = encoder.beginComputePass();
-      bpPass.setPipeline(this.buildPaddedPipeline);
-      bpPass.setBindGroup(0, bpBG);
-      bpPass.dispatchWorkgroups(bpWorkgroups, bpWorkgroups, bpWorkgroups);
-      bpPass.end();
+        // MC uniforms
+        const mcUniData = new ArrayBuffer(32);
+        const mcF32 = new Float32Array(mcUniData);
+        const mcU32 = new Uint32Array(mcUniData);
+        mcF32[0] = chunk.coord.x * cs * vs;
+        mcF32[1] = chunk.coord.y * cs * vs;
+        mcF32[2] = chunk.coord.z * cs * vs;
+        mcF32[3] = vs;
+        mcU32[4] = cs;
+        mcU32[5] = samples;
+        mcF32[6] = 0.0;
+        mcU32[7] = padded;
+        this.device.queue.writeBuffer(this.mcUniformBuffers[i], 0, new Float32Array(mcUniData));
+        this.device.queue.writeBuffer(this.counterBuffers[i], 0, new Uint32Array([0]));
 
-      // --- MarchingCubes ---
-      const mcUniData = new ArrayBuffer(32);
-      const mcF32 = new Float32Array(mcUniData);
-      const mcU32 = new Uint32Array(mcUniData);
-      mcF32[0] = chunk.coord.x * cs * vs;
-      mcF32[1] = chunk.coord.y * cs * vs;
-      mcF32[2] = chunk.coord.z * cs * vs;
-      mcF32[3] = vs;
-      mcU32[4] = cs;
-      mcU32[5] = samples;
-      mcF32[6] = 0.0;
-      mcU32[7] = padded;
+        const mcBG = this.device.createBindGroup({
+          layout: this.mcPipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: this.mcUniformBuffers[i] } },
+            { binding: 1, resource: { buffer: this.paddedBuffers[i] } },
+            { binding: 2, resource: { buffer: this.edgeTableBuffer } },
+            { binding: 3, resource: { buffer: this.triTableBuffer } },
+            { binding: 4, resource: { buffer: this.vertexBuffers[i] } },
+            { binding: 5, resource: { buffer: this.counterBuffers[i] } },
+          ],
+        });
 
-      const mcUniBuf = this.device.createBuffer({
-        size: 32,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      this.device.queue.writeBuffer(mcUniBuf, 0, new Float32Array(mcUniData));
-      tempBuffers.push(mcUniBuf);
+        const mcPass = encoder.beginComputePass();
+        mcPass.setPipeline(this.mcPipeline);
+        mcPass.setBindGroup(0, mcBG);
+        mcPass.dispatchWorkgroups(mcWorkgroups, mcWorkgroups, mcWorkgroups);
+        mcPass.end();
 
-      const vertexBuffer = this.device.createBuffer({
-        size: vertexBufferSize,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-      });
-      const counterBuffer = this.device.createBuffer({
-        size: 4,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-      });
-      this.device.queue.writeBuffer(counterBuffer, 0, new Uint32Array([0]));
-      perChunk.push({ vertexBuffer, counterBuffer });
-
-      const mcBG = this.device.createBindGroup({
-        layout: this.mcPipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: mcUniBuf } },
-          { binding: 1, resource: { buffer: paddedBuffer } },
-          { binding: 2, resource: { buffer: this.edgeTableBuffer } },
-          { binding: 3, resource: { buffer: this.triTableBuffer } },
-          { binding: 4, resource: { buffer: vertexBuffer } },
-          { binding: 5, resource: { buffer: counterBuffer } },
-        ],
-      });
-
-      const mcPass = encoder.beginComputePass();
-      mcPass.setPipeline(this.mcPipeline);
-      mcPass.setBindGroup(0, mcBG);
-      mcPass.dispatchWorkgroups(mcWorkgroups, mcWorkgroups, mcWorkgroups);
-      mcPass.end();
-    }
-
-    // Stage all counter readbacks
-    const counterRBs: GPUBuffer[] = [];
-    for (const { counterBuffer } of perChunk) {
-      const rb = this.device.createBuffer({
-        size: 4,
-        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-      });
-      encoder.copyBufferToBuffer(counterBuffer, 0, rb, 0, 4);
-      counterRBs.push(rb);
-    }
-
-    // --- Submit 1: all compute + counter readbacks ---
-    this.device.queue.submit([encoder.finish()]);
-
-    // --- Fence 1: all counters resolve in parallel ---
-    await Promise.all(counterRBs.map(rb => rb.mapAsync(GPUMapMode.READ)));
-
-    const vertexCounts: number[] = counterRBs.map(rb => {
-      const count = new Uint32Array(rb.getMappedRange())[0];
-      rb.unmap();
-      rb.destroy();
-      return count;
-    });
-
-    // Stage vertex readbacks for non-empty chunks
-    const encoder2 = this.device.createCommandEncoder();
-    const vertexRBs: { buffer: GPUBuffer; index: number }[] = [];
-
-    for (let i = 0; i < items.length; i++) {
-      if (vertexCounts[i] === 0) continue;
-      const readSize = vertexCounts[i] * 6 * 4;
-      const rb = this.device.createBuffer({
-        size: readSize,
-        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-      });
-      encoder2.copyBufferToBuffer(perChunk[i].vertexBuffer, 0, rb, 0, readSize);
-      vertexRBs.push({ buffer: rb, index: i });
-    }
-
-    if (vertexRBs.length > 0) {
-      // --- Submit 2: vertex readbacks ---
-      this.device.queue.submit([encoder2.finish()]);
-
-      // --- Fence 2: all vertex data resolves in parallel ---
-      await Promise.all(vertexRBs.map(vr => vr.buffer.mapAsync(GPUMapMode.READ)));
-    }
-
-    // Build results
-    const results: MeshData[] = items.map(() => ({
-      positions: new Float32Array(0),
-      normals: new Float32Array(0),
-      vertexCount: 0,
-    }));
-
-    for (const { buffer, index } of vertexRBs) {
-      const vc = vertexCounts[index];
-      const vertexData = new Float32Array(buffer.getMappedRange().slice(0));
-      buffer.unmap();
-      buffer.destroy();
-
-      // Split interleaved [pos, normal] into separate arrays for Three.js
-      const positions = new Float32Array(vc * 3);
-      const normals = new Float32Array(vc * 3);
-      for (let i = 0; i < vc; i++) {
-        const s = i * 6;
-        const d = i * 3;
-        positions[d] = vertexData[s];
-        positions[d + 1] = vertexData[s + 1];
-        positions[d + 2] = vertexData[s + 2];
-        normals[d] = vertexData[s + 3];
-        normals[d + 1] = vertexData[s + 4];
-        normals[d + 2] = vertexData[s + 5];
+        encoder.copyBufferToBuffer(this.counterBuffers[i], 0, this.counterReadbackBuffers[i], 0, 4);
+        encoder.copyBufferToBuffer(this.vertexBuffers[i], 0, this.vertexReadbackBuffers[i], 0, this.vertexBufferSize);
       }
-      results[index] = { positions, normals, vertexCount: vc };
-    }
 
-    // Cleanup
-    for (const { vertexBuffer, counterBuffer } of perChunk) {
-      vertexBuffer.destroy();
-      counterBuffer.destroy();
+      // Single submit + fence for this round
+      this.device.queue.submit([encoder.finish()]);
+      const mapPromises: Promise<void>[] = [];
+      for (let i = 0; i < n; i++) {
+        mapPromises.push(this.counterReadbackBuffers[i].mapAsync(GPUMapMode.READ));
+        mapPromises.push(this.vertexReadbackBuffers[i].mapAsync(GPUMapMode.READ));
+      }
+      await Promise.all(mapPromises);
+
+      for (let i = 0; i < n; i++) {
+        const vc = new Uint32Array(this.counterReadbackBuffers[i].getMappedRange())[0];
+        this.counterReadbackBuffers[i].unmap();
+
+        if (vc === 0) {
+          this.vertexReadbackBuffers[i].unmap();
+          results.push({ positions: new Float32Array(0), normals: new Float32Array(0), vertexCount: 0 });
+          continue;
+        }
+
+        const fullRange = this.vertexReadbackBuffers[i].getMappedRange();
+        const vertexData = new Float32Array(fullRange, 0, vc * 6);
+
+        const positions = new Float32Array(vc * 3);
+        const normals = new Float32Array(vc * 3);
+        for (let v = 0; v < vc; v++) {
+          const s = v * 6;
+          const d = v * 3;
+          positions[d] = vertexData[s];
+          positions[d + 1] = vertexData[s + 1];
+          positions[d + 2] = vertexData[s + 2];
+          normals[d] = vertexData[s + 3];
+          normals[d + 1] = vertexData[s + 4];
+          normals[d + 2] = vertexData[s + 5];
+        }
+        this.vertexReadbackBuffers[i].unmap();
+        results.push({ positions, normals, vertexCount: vc });
+      }
     }
-    for (const buf of tempBuffers) buf.destroy();
 
     return results;
   }
 
-  /**
-   * Release a chunk's GPU buffers
-   */
   releaseChunk(key: string): void {
     const gpuData = this.chunkBuffers.get(key);
     if (gpuData) {
@@ -434,14 +427,25 @@ export class GPUCompute {
     }
   }
 
-  /**
-   * Destroy all GPU resources
-   */
   destroy(): void {
     for (const [, gpuData] of this.chunkBuffers) {
       gpuData.sdfBuffer.destroy();
     }
     this.chunkBuffers.clear();
+
+    // Destroy pooled buffers
+    const pools = [
+      this.brushUniformBuffers, this.sdfReadbackBuffers,
+      this.sliceBuffers, this.paddedBuffers,
+      this.bpUniformBuffers, this.mcUniformBuffers,
+      this.vertexBuffers, this.counterBuffers,
+      this.vertexReadbackBuffers, this.counterReadbackBuffers,
+    ];
+    for (const pool of pools) {
+      for (const buf of pool) buf.destroy();
+      pool.length = 0;
+    }
+
     this.edgeTableBuffer?.destroy();
     this.triTableBuffer?.destroy();
     this.device?.destroy();

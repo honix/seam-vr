@@ -3,15 +3,20 @@
 // Each thread processes one voxel sample.
 
 struct BrushUniforms {
-  center: vec3<f32>,      // World-space brush center
-  radius: f32,            // Brush radius
-  strength: f32,          // Brush strength multiplier
-  smoothing: f32,         // Smooth blend parameter (k)
-  operation: u32,         // 0 = add, 1 = subtract
-  chunk_origin: vec3<f32>,// World-space origin of this chunk
-  voxel_size: f32,        // Size of each voxel in world units
-  samples_per_axis: u32,  // Number of samples per axis (chunkSize + 1)
-  _pad: u32,
+  center: vec3<f32>,       // World-space brush end (current position)
+  radius: f32,             // Brush radius
+  strength: f32,           // Brush strength multiplier
+  smoothing: f32,          // Smooth blend parameter (k)
+  operation: u32,          // 0 = add, 1 = subtract
+  _pad0: u32,
+  prev_center: vec3<f32>,  // World-space brush start (previous position)
+  _pad1: f32,
+  chunk_origin: vec3<f32>, // World-space origin of this chunk
+  voxel_size: f32,         // Size of each voxel in world units
+  samples_per_axis: u32,   // Number of samples per axis (chunkSize + 1)
+  _pad2a: u32,
+  _pad2b: u32,
+  _pad2c: u32,
 }
 
 @group(0) @binding(0) var<uniform> brush: BrushUniforms;
@@ -31,9 +36,12 @@ fn smooth_max(a: f32, b: f32, k: f32) -> f32 {
   return -smooth_min(-a, -b, k);
 }
 
-// Sphere SDF
-fn sphere_sdf(p: vec3<f32>, center: vec3<f32>, radius: f32) -> f32 {
-  return length(p - center) - radius;
+// Capsule SDF: line segment from a to b with radius r
+fn capsule_sdf(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, radius: f32) -> f32 {
+  let ab = b - a;
+  let ap = p - a;
+  let t = clamp(dot(ap, ab) / dot(ab, ab), 0.0, 1.0);
+  return length(ap - ab * t) - radius;
 }
 
 @compute @workgroup_size(4, 4, 4)
@@ -58,15 +66,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     f32(iz) * brush.voxel_size
   );
 
-  // Early exit: if sample is far from brush, skip
-  let dist_to_brush = length(world_pos - brush.center);
+  // Early exit: if sample is far from capsule brush, skip
+  let ab = brush.center - brush.prev_center;
+  let ap = world_pos - brush.prev_center;
+  let t_proj = clamp(dot(ap, ab) / max(dot(ab, ab), 1e-10), 0.0, 1.0);
+  let dist_to_brush = length(ap - ab * t_proj);
   let influence_radius = brush.radius + brush.smoothing * 2.0;
   if (dist_to_brush > influence_radius) {
     return;
   }
 
-  // Compute sphere SDF for the brush
-  let brush_sdf = sphere_sdf(world_pos, brush.center, brush.radius * brush.strength);
+  // Capsule SDF: line segment from prev_center to center with brush radius
+  let brush_sdf = capsule_sdf(world_pos, brush.prev_center, brush.center, brush.radius * brush.strength);
   let current_sdf = sdf_data[idx];
   var new_sdf: f32;
 

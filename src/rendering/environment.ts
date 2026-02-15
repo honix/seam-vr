@@ -4,7 +4,7 @@ import * as THREE from 'three';
  * Set up scene environment lighting.
  * Creates directional, ambient, and hemisphere lights.
  */
-export function setupEnvironment(scene: THREE.Scene): void {
+export function setupEnvironment(scene: THREE.Object3D): void {
   // Main directional light
   const directional = new THREE.DirectionalLight(0xffffff, 1.0);
   directional.position.set(5, 10, 7);
@@ -25,7 +25,7 @@ export function setupEnvironment(scene: THREE.Scene): void {
 /**
  * Create a ground grid for spatial reference.
  */
-export function createGroundGrid(scene: THREE.Scene): THREE.GridHelper {
+export function createGroundGrid(scene: THREE.Object3D): THREE.GridHelper {
   const grid = new THREE.GridHelper(10, 10, 0x444466, 0x333355);
   grid.name = 'seam_grid';
   scene.add(grid);

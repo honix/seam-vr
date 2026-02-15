@@ -91,6 +91,7 @@ export class RenderPipeline {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.Camera;
+  private contentParent: THREE.Object3D;
   private nodeData: Map<string, NodeRenderData> = new Map();
 
   constructor(
@@ -101,6 +102,15 @@ export class RenderPipeline {
     this.renderer = renderer;
     this.scene = scene;
     this.camera = camera;
+    this.contentParent = scene; // Default: add meshes directly to scene
+  }
+
+  /**
+   * Set the parent group for spawned content meshes.
+   * Used by world navigation to parent content into a movable group.
+   */
+  setContentParent(parent: THREE.Object3D): void {
+    this.contentParent = parent;
   }
 
   /**
@@ -153,6 +163,32 @@ export class RenderPipeline {
         if (node) this.onNodeUpdated(node, 'material');
         break;
       }
+      case 'spawn_light': {
+        const node = sceneGraph.getNode(cmd.id);
+        if (node) this.onLightAdded(node, cmd);
+        break;
+      }
+      case 'set_visibility': {
+        const data = this.nodeData.get(cmd.id);
+        if (data) {
+          data.mesh.visible = cmd.visible;
+        }
+        break;
+      }
+      case 'set_light_param': {
+        const data = this.nodeData.get(cmd.id);
+        if (data) {
+          const light = data.mesh.children.find(c => c instanceof THREE.PointLight) as THREE.PointLight | undefined;
+          if (light) {
+            if (cmd.intensity !== undefined) light.intensity = cmd.intensity;
+            if (cmd.color) light.color.setRGB(cmd.color[0], cmd.color[1], cmd.color[2]);
+          }
+        }
+        break;
+      }
+      case 'create_group':
+        // Groups have no mesh representation
+        break;
     }
   }
 
@@ -162,6 +198,7 @@ export class RenderPipeline {
   ): void {
     switch (cmd.cmd) {
       case 'spawn':
+      case 'spawn_light':
         // Undo of spawn = removal
         this.onNodeRemoved(cmd.id);
         break;
@@ -169,6 +206,14 @@ export class RenderPipeline {
         // Undo of delete = re-add
         const node = sceneGraph.getNode(cmd.id);
         if (node) this.onNodeAdded(node);
+        break;
+      }
+      case 'set_visibility': {
+        const data = this.nodeData.get(cmd.id);
+        const node = sceneGraph.getNode(cmd.id);
+        if (data && node) {
+          data.mesh.visible = node.visible;
+        }
         break;
       }
       default: {
@@ -206,8 +251,8 @@ export class RenderPipeline {
     // Apply transform
     this.applyTransform(mesh, node);
 
-    // Add to Three.js scene
-    this.scene.add(mesh);
+    // Add to content parent (worldGroup or scene)
+    this.contentParent.add(mesh);
 
     // Store reference on node for other systems
     node.mesh = mesh;
@@ -221,13 +266,47 @@ export class RenderPipeline {
   }
 
   /**
+   * Called when a light node is spawned.
+   * Creates a PointLight + small glowing sphere visual.
+   */
+  private onLightAdded(node: SceneNode, cmd: { [key: string]: any }): void {
+    const intensity = cmd.intensity ?? 1.0;
+    const colorArr = cmd.color ?? [1, 1, 0.9];
+    const threeColor = new THREE.Color(colorArr[0], colorArr[1], colorArr[2]);
+
+    // Visual mesh: small glowing sphere
+    const geo = new THREE.SphereGeometry(0.03, 12, 8);
+    const mat = new THREE.MeshBasicMaterial({ color: threeColor });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = `light_${node.id}`;
+
+    // Attach actual PointLight as child
+    const light = new THREE.PointLight(threeColor, intensity, 10);
+    mesh.add(light);
+
+    // Position
+    if (cmd.position) {
+      mesh.position.set(cmd.position[0], cmd.position[1], cmd.position[2]);
+    }
+
+    this.contentParent.add(mesh);
+    node.mesh = mesh;
+
+    this.nodeData.set(node.id, {
+      mesh,
+      sourceGeometry: geo,
+      deformerStack: new DeformerStack(),
+    });
+  }
+
+  /**
    * Called when a node is removed from the scene graph.
    */
   onNodeRemoved(nodeId: string): void {
     const data = this.nodeData.get(nodeId);
     if (!data) return;
 
-    this.scene.remove(data.mesh);
+    this.contentParent.remove(data.mesh);
     data.mesh.geometry.dispose();
     (data.mesh.material as THREE.Material).dispose();
     data.sourceGeometry.dispose();

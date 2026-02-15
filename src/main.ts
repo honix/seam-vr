@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 
 // Core
-import { SceneGraph } from './core/scene-graph';
+import { SceneGraph, SceneNode } from './core/scene-graph';
 import { CommandBus } from './core/command-bus';
 import { registerAllCommands } from './core/commands';
 import { initTestHarness } from './test-harness/harness';
@@ -13,6 +13,8 @@ import { initTestHarness } from './test-harness/harness';
 import { RenderPipeline } from './rendering/render-pipeline';
 import { setupEnvironment, createGroundGrid } from './rendering/environment';
 import { createOrbitCamera, updateOrbitCamera } from './viewer/orbit-camera';
+import { SelectionOutline } from './rendering/selection-outline';
+import { LightGizmo } from './rendering/light-gizmo';
 
 // XR
 import { XRSessionManager } from './xr/xr-session';
@@ -26,6 +28,7 @@ import { ToolSystem } from './interaction/tool-system';
 import { BrushPreview } from './interaction/brush-preview';
 import { WorldNavigation } from './interaction/world-navigation';
 import { LayerGrabSystem } from './interaction/layer-grab-system';
+import { SelectionManager } from './interaction/selection-manager';
 
 // Animation
 import { AnimationSystem } from './animation/animation-system';
@@ -125,6 +128,13 @@ async function init() {
   worldGroup.add(sculptEngine.sculptGroup);
   const sculptInteraction = new SculptInteraction(sculptEngine);
 
+  // --- Register sculpt volume as scene node ---
+  const sculptNode = new SceneNode('sculpt_volume', 'sphere');
+  sculptNode.nodeType = 'sculpt_volume';
+  sculptNode.layerType = 'sculpt';
+  sculptNode.mesh = null;
+  sceneGraph.addNode(sculptNode);
+
   // --- Brush Preview ---
   const brushPreview = new BrushPreview(scene, toolSystem);
 
@@ -133,9 +143,48 @@ async function init() {
   const timelineController = new TimelineController();
 
   // --- UI ---
-  const uiManager = new UIManager(scene, commandBus, timelineController, toolSystem, sceneGraph);
+  const uiManager = new UIManager(scene, commandBus, timelineController, toolSystem, sceneGraph, worldGroup);
+  uiManager.setSculptEngine(sculptEngine);
   uiManager.radialMenuL.setCamera(camera);
   uiManager.radialMenuR.setCamera(camera);
+
+  // --- Selection System ---
+  const selectionManager = new SelectionManager(sceneGraph, worldGroup);
+  selectionManager.setSculptEngine(sculptEngine);
+
+  const selectionOutline = new SelectionOutline();
+  const lightGizmo = new LightGizmo();
+
+  // Wire selection changes to inspector, hierarchy, outline, and gizmo
+  selectionManager.onChange((nodeId, node) => {
+    // Update inspector
+    uiManager.inspector.setSelectedNode(node ?? null);
+
+    // Update hierarchy highlight
+    uiManager.hierarchy.setSelectedNodeId(nodeId);
+
+    // Update selection outline
+    selectionOutline.clear();
+    lightGizmo.clear();
+
+    if (node) {
+      if (node.nodeType === 'sculpt_volume') {
+        selectionOutline.setTargetGroup(sculptEngine.sculptGroup);
+      } else if (node.mesh) {
+        selectionOutline.setTarget(node);
+      }
+
+      // Show light gizmo for light nodes
+      if (node.layerType === 'light') {
+        lightGizmo.setTarget(node);
+      }
+    }
+  });
+
+  // Wire hierarchy row clicks to selection
+  uiManager.hierarchy.onSelect((nodeId) => {
+    selectionManager.selectById(nodeId);
+  });
 
   // --- Input Handlers ---
   const inputHandler = new XRInputHandler(xrEmulator);
@@ -160,6 +209,8 @@ async function init() {
   );
   interactionManager.setWorldNavigation(worldNavigation);
   interactionManager.setLayerGrabSystem(layerGrabSystem);
+  interactionManager.setSelectionManager(selectionManager);
+  interactionManager.setPanels(uiManager.getPanels());
   interactionManager.setUICallbacks({
     toggleInspector: (pos) => uiManager.toggleInspector(pos),
     toggleHierarchy: (pos) => uiManager.toggleHierarchy(pos),
@@ -178,6 +229,8 @@ async function init() {
   );
   interactionManagerVR.setWorldNavigation(worldNavigation);
   interactionManagerVR.setLayerGrabSystem(layerGrabSystem);
+  interactionManagerVR.setSelectionManager(selectionManager);
+  interactionManagerVR.setPanels(uiManager.getPanels());
   interactionManagerVR.setUICallbacks({
     toggleInspector: (pos) => uiManager.toggleInspector(pos),
     toggleHierarchy: (pos) => uiManager.toggleHierarchy(pos),
@@ -188,6 +241,9 @@ async function init() {
   window.__seam.sculptEngine = sculptEngine;
   window.__seam.toolSystem = toolSystem;
   window.__seam.camera = camera;
+  (window.__seam as any)._setUI(uiManager);
+  (window.__seam as any)._setSelection(selectionManager);
+  (window.__seam as any)._setOrbitControls(orbitControls);
 
   // Wire emulator commands through the test harness
   const origExec = commandBus.exec.bind(commandBus);
@@ -241,6 +297,9 @@ async function init() {
 
     // Update UI
     uiManager.update();
+
+    // Update selection outline (box helper needs per-frame update)
+    selectionOutline.update();
 
     // Render
     const renderStart = performance.now();

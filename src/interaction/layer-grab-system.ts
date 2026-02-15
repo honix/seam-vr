@@ -30,8 +30,9 @@ export class LayerGrabSystem {
 
   /**
    * Try to grab the closest layer within range.
+   * Position and rotation are in worldGroup local space.
    */
-  tryGrab(hand: 'left' | 'right', position: Vec3): boolean {
+  tryGrab(hand: 'left' | 'right', position: Vec3, rotation: Vec4): boolean {
     const handPos = new THREE.Vector3(...position);
 
     let closestNode: SceneNode | null = null;
@@ -62,7 +63,11 @@ export class LayerGrabSystem {
     const node = closestNode as SceneNode;
 
     const meshPos = new THREE.Vector3(...node.transform.position);
-    const offsetPos = meshPos.clone().sub(handPos);
+    const handQuat = new THREE.Quaternion(...rotation);
+
+    // Store offset in controller-local space so it rotates with the hand
+    const worldOffset = meshPos.clone().sub(handPos);
+    const offsetPos = worldOffset.applyQuaternion(handQuat.clone().invert());
 
     const meshQuat = new THREE.Quaternion(
       node.transform.rotation[0],
@@ -70,7 +75,6 @@ export class LayerGrabSystem {
       node.transform.rotation[2],
       node.transform.rotation[3],
     );
-    const handQuat = new THREE.Quaternion(); // identity
     const offsetQuat = handQuat.clone().invert().multiply(meshQuat);
 
     this.grabs.set(hand, {
@@ -87,6 +91,7 @@ export class LayerGrabSystem {
 
   /**
    * Update grab position/rotation each frame while trigger is held.
+   * Position and rotation are in worldGroup local space.
    */
   updateGrab(hand: 'left' | 'right', position: Vec3, rotation: Vec4): void {
     const grab = this.grabs.get(hand);
@@ -99,10 +104,13 @@ export class LayerGrabSystem {
     }
 
     const handPos = new THREE.Vector3(...position);
-    const newPos = handPos.clone().add(grab.offsetPosition);
+    const handQuat = new THREE.Quaternion(...rotation);
+
+    // Rotate offset from controller-local back to scene space
+    const rotatedOffset = grab.offsetPosition.clone().applyQuaternion(handQuat);
+    const newPos = handPos.clone().add(rotatedOffset);
     node.transform.position = [newPos.x, newPos.y, newPos.z];
 
-    const handQuat = new THREE.Quaternion(...rotation);
     const newQuat = handQuat.clone().multiply(grab.offsetQuaternion);
     node.transform.rotation = [newQuat.x, newQuat.y, newQuat.z, newQuat.w];
 

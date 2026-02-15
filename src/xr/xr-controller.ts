@@ -16,7 +16,9 @@ export interface XRControllerState {
   gripJustPressed: boolean;
   gripJustReleased: boolean;
   buttonAJustPressed: boolean;
+  buttonAJustReleased: boolean;
   buttonBJustPressed: boolean;
+  buttonBJustReleased: boolean;
 }
 
 const DEFAULT_BUTTON: XRButtonState = { pressed: false, touched: false, value: 0 };
@@ -35,7 +37,9 @@ function createDefaultState(): XRControllerState {
     gripJustPressed: false,
     gripJustReleased: false,
     buttonAJustPressed: false,
+    buttonAJustReleased: false,
     buttonBJustPressed: false,
+    buttonBJustReleased: false,
   };
 }
 
@@ -94,6 +98,20 @@ export class XRControllerTracker {
     scene.add(this.controllerR);
     scene.add(this.gripL);
     scene.add(this.gripR);
+
+    // Debug: log when controllers connect/disconnect
+    this.controllerL.addEventListener('connected', (event: any) => {
+      console.log('[XR] Controller 0 connected:', event.data?.handedness, event.data?.profiles);
+    });
+    this.controllerR.addEventListener('connected', (event: any) => {
+      console.log('[XR] Controller 1 connected:', event.data?.handedness, event.data?.profiles);
+    });
+    this.controllerL.addEventListener('disconnected', () => {
+      console.log('[XR] Controller 0 disconnected');
+    });
+    this.controllerR.addEventListener('disconnected', () => {
+      console.log('[XR] Controller 1 disconnected');
+    });
   }
 
   update(): void {
@@ -166,7 +184,9 @@ export class XRControllerTracker {
       state.gripJustPressed = state.grip.pressed && !this.prevGripL;
       state.gripJustReleased = !state.grip.pressed && this.prevGripL;
       state.buttonAJustPressed = state.buttonA.pressed && !this.prevButtonAL;
+      state.buttonAJustReleased = !state.buttonA.pressed && this.prevButtonAL;
       state.buttonBJustPressed = state.buttonB.pressed && !this.prevButtonBL;
+      state.buttonBJustReleased = !state.buttonB.pressed && this.prevButtonBL;
 
       this.prevTriggerL = state.trigger.pressed;
       this.prevGripL = state.grip.pressed;
@@ -178,7 +198,9 @@ export class XRControllerTracker {
       state.gripJustPressed = state.grip.pressed && !this.prevGripR;
       state.gripJustReleased = !state.grip.pressed && this.prevGripR;
       state.buttonAJustPressed = state.buttonA.pressed && !this.prevButtonAR;
+      state.buttonAJustReleased = !state.buttonA.pressed && this.prevButtonAR;
       state.buttonBJustPressed = state.buttonB.pressed && !this.prevButtonBR;
+      state.buttonBJustReleased = !state.buttonB.pressed && this.prevButtonBR;
 
       this.prevTriggerR = state.trigger.pressed;
       this.prevGripR = state.grip.pressed;

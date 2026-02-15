@@ -18,7 +18,9 @@ function createDefaultState(): XRControllerState {
     gripJustPressed: false,
     gripJustReleased: false,
     buttonAJustPressed: false,
+    buttonAJustReleased: false,
     buttonBJustPressed: false,
+    buttonBJustReleased: false,
   };
 }
 
@@ -134,7 +136,9 @@ export class XREmulator {
     state.gripJustPressed = state.grip.pressed && !prev.grip;
     state.gripJustReleased = !state.grip.pressed && prev.grip;
     state.buttonAJustPressed = state.buttonA.pressed && !prev.buttonA;
+    state.buttonAJustReleased = !state.buttonA.pressed && prev.buttonA;
     state.buttonBJustPressed = state.buttonB.pressed && !prev.buttonB;
+    state.buttonBJustReleased = !state.buttonB.pressed && prev.buttonB;
 
     prev.trigger = state.trigger.pressed;
     prev.grip = state.grip.pressed;

@@ -22,9 +22,10 @@ import { XRInputHandler } from './xr/xr-input-handler';
 
 // Interaction
 import { InteractionManager } from './interaction/interaction-manager';
-import { GrabSystem } from './interaction/grab-system';
-import { HandleSystem } from './interaction/handle-system';
-import { ModeManager } from './interaction/mode-manager';
+import { ToolSystem } from './interaction/tool-system';
+import { BrushPreview } from './interaction/brush-preview';
+import { WorldNavigation } from './interaction/world-navigation';
+import { LayerGrabSystem } from './interaction/layer-grab-system';
 
 // Animation
 import { AnimationSystem } from './animation/animation-system';
@@ -59,9 +60,17 @@ async function init() {
   );
   camera.position.set(0, 1.6, 3);
 
+  // --- World Group ---
+  // All content (environment, grid, sculpt, primitives) goes into worldGroup.
+  // Controllers and UI remain direct scene children (XR manages their position).
+  // WorldNavigation moves/scales/rotates this group for grip-based navigation.
+  const worldGroup = new THREE.Group();
+  worldGroup.name = 'world_content';
+  scene.add(worldGroup);
+
   // --- Environment ---
-  setupEnvironment(scene);
-  createGroundGrid(scene);
+  setupEnvironment(worldGroup);
+  createGroundGrid(worldGroup);
 
   // --- Core Systems ---
   const sceneGraph = new SceneGraph();
@@ -70,6 +79,7 @@ async function init() {
 
   // --- Render Pipeline ---
   const renderPipeline = new RenderPipeline(renderer, scene, camera);
+  renderPipeline.setContentParent(worldGroup);
   renderPipeline.connectCommandBus(commandBus, sceneGraph);
 
   // --- Orbit Camera (flat-screen fallback) ---
@@ -96,7 +106,7 @@ async function init() {
   xrSession.onSessionStart = () => {
     useEmulator = false;
     controllerTracker.setupControllers(scene);
-    orbitControls.enabled = false; // Disable orbit in VR
+    orbitControls.enabled = false;
   };
 
   xrSession.onSessionEnd = () => {
@@ -104,53 +114,77 @@ async function init() {
     orbitControls.enabled = true;
   };
 
-  // --- Input Handler ---
-  // XRInputHandler works with both real and emulated controllers
-  const inputHandler = new XRInputHandler(xrEmulator);
-  const inputHandlerVR = new XRInputHandler(controllerTracker);
+  // --- Tool System ---
+  const toolSystem = new ToolSystem();
 
-  // --- Interaction Systems ---
-  const modeManager = new ModeManager();
-  const grabSystem = new GrabSystem(scene, sceneGraph, commandBus);
-  const handleSystem = new HandleSystem(scene, sceneGraph, commandBus);
+  // --- Sculpting ---
+  const sculptEngine = new SculptEngine(scene);
+  await sculptEngine.initGPU();
+  // Reparent sculpt group from scene into worldGroup so it moves with world navigation
+  scene.remove(sculptEngine.sculptGroup);
+  worldGroup.add(sculptEngine.sculptGroup);
+  const sculptInteraction = new SculptInteraction(sculptEngine);
+
+  // --- Brush Preview ---
+  const brushPreview = new BrushPreview(scene, toolSystem);
 
   // --- Animation ---
   const animationSystem = new AnimationSystem();
   const timelineController = new TimelineController();
 
   // --- UI ---
-  const uiManager = new UIManager(scene, commandBus, timelineController);
+  const uiManager = new UIManager(scene, commandBus, timelineController, toolSystem, sceneGraph);
 
-  // --- Interaction Manager ---
+  // --- Input Handlers ---
+  const inputHandler = new XRInputHandler(xrEmulator);
+  const inputHandlerVR = new XRInputHandler(controllerTracker);
+
+  // --- World Navigation ---
+  const worldNavigation = new WorldNavigation(worldGroup);
+
+  // --- Layer Grab System ---
+  const layerGrabSystem = new LayerGrabSystem(sceneGraph, commandBus);
+
+  // --- Interaction Manager (emulator) ---
   const interactionManager = new InteractionManager(
     xrEmulator,
     inputHandler,
-    modeManager,
-    grabSystem,
-    handleSystem,
+    toolSystem,
+    sculptInteraction,
+    brushPreview,
+    uiManager.radialMenuL,
+    uiManager.radialMenuR,
     commandBus,
-    uiManager.palette
   );
+  interactionManager.setWorldNavigation(worldNavigation);
+  interactionManager.setLayerGrabSystem(layerGrabSystem);
+  interactionManager.setUICallbacks({
+    toggleInspector: (pos) => uiManager.toggleInspector(pos),
+    toggleHierarchy: (pos) => uiManager.toggleHierarchy(pos),
+  });
 
+  // --- Interaction Manager (VR) ---
   const interactionManagerVR = new InteractionManager(
     controllerTracker,
     inputHandlerVR,
-    modeManager,
-    grabSystem,
-    handleSystem,
+    toolSystem,
+    sculptInteraction,
+    brushPreview,
+    uiManager.radialMenuL,
+    uiManager.radialMenuR,
     commandBus,
-    uiManager.palette
   );
-
-  // --- Sculpting ---
-  const sculptEngine = new SculptEngine(scene);
-  await sculptEngine.initGPU();
-  const sculptInteraction = new SculptInteraction(sculptEngine);
+  interactionManagerVR.setWorldNavigation(worldNavigation);
+  interactionManagerVR.setLayerGrabSystem(layerGrabSystem);
+  interactionManagerVR.setUICallbacks({
+    toggleInspector: (pos) => uiManager.toggleInspector(pos),
+    toggleHierarchy: (pos) => uiManager.toggleHierarchy(pos),
+  });
 
   // --- Test Harness ---
   initTestHarness(commandBus, sceneGraph);
   window.__seam.sculptEngine = sculptEngine;
-  window.__seam.modeManager = modeManager;
+  window.__seam.toolSystem = toolSystem;
   window.__seam.camera = camera;
 
   // Wire emulator commands through the test harness
@@ -189,21 +223,13 @@ async function init() {
       animationSystem.evaluate(time, sceneGraph);
     }
 
-    // Update input and interaction
+    // Update input and interaction (unified - no mode branching)
     if (useEmulator) {
       xrEmulator.update();
-      if (modeManager.currentMode === 'sculpt') {
-        sculptInteraction.update(xrEmulator.right, xrEmulator.left);
-      } else {
-        interactionManager.update();
-      }
+      interactionManager.update();
     } else if (xrSession.isInVR()) {
       controllerTracker.update();
-      if (modeManager.currentMode === 'sculpt') {
-        sculptInteraction.update(controllerTracker.right, controllerTracker.left);
-      } else {
-        interactionManagerVR.update();
-      }
+      interactionManagerVR.update();
     }
 
     // Update orbit camera (only when not in VR)

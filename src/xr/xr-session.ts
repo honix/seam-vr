@@ -60,6 +60,12 @@ export class XRSessionManager {
       this.onSessionEnd?.();
     });
 
+    session.addEventListener('inputsourceschange', () => {
+      console.log('[XR] Input sources changed, count:', session.inputSources.length);
+    });
+
+    console.log('[XR] Session started, inputSources:', session.inputSources.length);
+
     this.onSessionStart?.();
   }
 

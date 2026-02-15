@@ -77,7 +77,7 @@ export class XRControllerTracker {
     // Ray visual for each controller
     const rayGeometry = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(0, 0, -50),
     ]);
 
     const rayMaterialL = new THREE.LineBasicMaterial({ color: 0x4488ff });

@@ -1,18 +1,22 @@
 // Central input dispatcher.
 // Routes input actions to the appropriate subsystem based on per-hand tool selection.
-// No mode-based branching; tools determine behavior.
+// UI panels intercept rays BEFORE any tool — if a ray hits an open panel,
+// the trigger is routed to the panel exclusively regardless of active tool.
 
+import * as THREE from 'three';
 import { XRControllerTracker } from '../xr/xr-controller';
 import { XREmulator } from '../xr/xr-emulator';
 import { XRInputHandler, InputAction } from '../xr/xr-input-handler';
-import { ToolSystem, isSculptTool, isSpawnTool } from './tool-system';
+import { ToolSystem, isSculptTool, isSpawnTool, isSelectTool } from './tool-system';
 import { BrushPreview } from './brush-preview';
 import { WorldNavigation } from './world-navigation';
 import { LayerGrabSystem } from './layer-grab-system';
+import { SelectionManager } from './selection-manager';
 import { SculptInteraction } from '../sculpting/sculpt-interaction';
 import { RadialMenu } from '../ui/radial-menu';
+import { FloatingPanel } from '../ui/floating-panel';
 import { CommandBus } from '../core/command-bus';
-import type { Vec3 } from '../types';
+import type { Vec3, Vec4 } from '../types';
 
 // Dead zone for trigger analog
 const TRIGGER_DEAD_ZONE = 0.1;
@@ -27,6 +31,12 @@ export interface UICallbacks {
   toggleHierarchy?: (position: Vec3) => void;
 }
 
+// Per-hand state when trigger is interacting with a panel
+interface PanelTriggerState {
+  panel: FloatingPanel;
+  mode: 'drag' | 'control' | 'resize' | 'block';
+}
+
 export class InteractionManager {
   private controllers: XRControllerTracker | XREmulator;
   private inputHandler: XRInputHandler;
@@ -38,7 +48,12 @@ export class InteractionManager {
   private commandBus: CommandBus;
   private worldNavigation: WorldNavigation | null = null;
   private layerGrabSystem: LayerGrabSystem | null = null;
+  private selectionManager: SelectionManager | null = null;
   private uiCallbacks: UICallbacks = {};
+
+  // Panel system
+  private panels: FloatingPanel[] = [];
+  private panelTriggerState: Map<string, PanelTriggerState> = new Map(); // hand → trigger panel interaction
 
   constructor(
     controllers: XRControllerTracker | XREmulator,
@@ -68,6 +83,14 @@ export class InteractionManager {
     this.layerGrabSystem = lgs;
   }
 
+  setSelectionManager(sm: SelectionManager): void {
+    this.selectionManager = sm;
+  }
+
+  setPanels(panels: FloatingPanel[]): void {
+    this.panels = panels;
+  }
+
   setUICallbacks(callbacks: UICallbacks): void {
     this.uiCallbacks = callbacks;
   }
@@ -78,10 +101,32 @@ export class InteractionManager {
     return this.worldNavigation.worldToLocal(worldPos) as [number, number, number];
   }
 
+  /** Transform a world-space quaternion into worldGroup local space. */
+  private toLocalQuat(worldQuat: Vec4): Vec4 {
+    if (!this.worldNavigation) return [...worldQuat] as Vec4;
+    return this.worldNavigation.worldToLocalQuat(worldQuat) as Vec4;
+  }
+
   /** Scale a scene-space radius to worldGroup local space (accounts for zoom). */
   private toLocalRadius(radius: number): number {
     if (!this.worldNavigation) return radius;
     return radius / this.worldNavigation.getScale();
+  }
+
+  /** Get controller rotation quaternion for a given hand. */
+  private getControllerRotation(hand: string): Vec4 {
+    const state = hand === 'left' ? this.controllers.left : this.controllers.right;
+    return [...state.rotation] as Vec4;
+  }
+
+  /** Build a raycaster from position + direction. */
+  private buildRaycaster(position: Vec3, direction: Vec3): THREE.Raycaster {
+    const raycaster = new THREE.Raycaster();
+    raycaster.set(
+      new THREE.Vector3(position[0], position[1], position[2]),
+      new THREE.Vector3(direction[0], direction[1], direction[2]).normalize()
+    );
+    return raycaster;
   }
 
   update(): void {
@@ -104,7 +149,7 @@ export class InteractionManager {
       for (const hand of ['left', 'right'] as const) {
         if (this.layerGrabSystem.isGrabbing(hand)) {
           const state = hand === 'left' ? this.controllers.left : this.controllers.right;
-          this.layerGrabSystem.updateGrab(hand, this.toLocalPos(state.position), state.rotation);
+          this.layerGrabSystem.updateGrab(hand, this.toLocalPos(state.position), this.toLocalQuat(state.rotation));
         }
       }
     }
@@ -113,10 +158,113 @@ export class InteractionManager {
     this.brushPreview.update(this.controllers.left, this.controllers.right);
   }
 
+  // -------------------------------------------------------
+  // Panel intercept: test ALL trigger events against panels
+  // BEFORE routing to any tool. Returns true if consumed.
+  // -------------------------------------------------------
+
+  /**
+   * Test trigger_start against open panels.
+   * If ray hits a panel, the trigger is routed to the panel exclusively.
+   * Returns true if a panel consumed the event.
+   */
+  private tryPanelTriggerStart(hand: 'left' | 'right', position: Vec3, direction: Vec3): boolean {
+    const ray = this.buildRaycaster(position, direction);
+
+    for (const panel of this.panels) {
+      if (!panel.isOpen) continue;
+
+      // Test interactive controls first (sliders, pickers, dropdowns)
+      if (panel.rayInteract(ray, 'start')) {
+        const mode = panel.isDraggingControl() ? 'control' : 'block';
+        this.panelTriggerState.set(hand, { panel, mode });
+        return true;
+      }
+
+      // Then test panel surface (title bar, resize, body)
+      const hit = panel.rayHitTest(ray);
+      if (hit === 'resize') {
+        panel.beginResize(ray);
+        this.panelTriggerState.set(hand, { panel, mode: 'resize' });
+        return true;
+      }
+      if (hit === 'title') {
+        panel.beginRayGrab(ray, this.getControllerRotation(hand));
+        this.panelTriggerState.set(hand, { panel, mode: 'drag' });
+        return true;
+      }
+      if (hit === 'body') {
+        // Block the ray — panel body absorbs it
+        this.panelTriggerState.set(hand, { panel, mode: 'block' });
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Forward trigger_update to the panel that captured the trigger.
+   * Returns true if a panel is handling this hand.
+   */
+  private tryPanelTriggerUpdate(hand: string, position: Vec3, direction: Vec3): boolean {
+    const state = this.panelTriggerState.get(hand);
+    if (!state) return false;
+
+    const ray = this.buildRaycaster(position, direction);
+
+    switch (state.mode) {
+      case 'drag':
+        state.panel.updateRayGrab(ray, this.getControllerRotation(hand));
+        break;
+      case 'control':
+        state.panel.rayInteract(ray, 'update');
+        break;
+      case 'resize':
+        state.panel.updateResize(ray);
+        break;
+      case 'block':
+        // Do nothing, just consume the event
+        break;
+    }
+    return true;
+  }
+
+  /**
+   * End panel trigger interaction.
+   * Returns true if a panel was handling this hand.
+   */
+  private tryPanelTriggerEnd(hand: string): boolean {
+    const state = this.panelTriggerState.get(hand);
+    if (!state) return false;
+
+    switch (state.mode) {
+      case 'drag':
+        state.panel.releaseGrab();
+        break;
+      case 'control':
+        state.panel.rayInteract(new THREE.Raycaster(), 'end');
+        break;
+      case 'resize':
+        state.panel.endResize();
+        break;
+    }
+
+    this.panelTriggerState.delete(hand);
+    return true;
+  }
+
+  // -------------------------------------------------------
+
   private routeAction(action: InputAction): void {
     switch (action.action) {
-      // --- Trigger: use active tool ---
+      // --- Trigger: panels intercept first, then active tool ---
       case 'trigger_start': {
+        // Panel intercept — any tool, if ray hits panel, panel gets exclusive input
+        if (this.tryPanelTriggerStart(action.hand, action.position, action.direction)) {
+          break; // Panel consumed
+        }
+
         const tool = this.toolSystem.getTool(action.hand);
         if (isSculptTool(tool)) {
           const strength = triggerStrength(action.value);
@@ -129,7 +277,10 @@ export class InteractionManager {
         } else if (isSpawnTool(tool)) {
           this.handleSpawn(tool, this.toLocalPos(action.position));
         } else if (tool === 'move_layer') {
-          this.layerGrabSystem?.tryGrab(action.hand, this.toLocalPos(action.position));
+          this.layerGrabSystem?.tryGrab(action.hand, this.toLocalPos(action.position), this.toLocalQuat(this.getControllerRotation(action.hand)));
+        } else if (isSelectTool(tool)) {
+          // No panel hit — raycast into scene for selection
+          this.selectionManager?.raySelect(action.position, action.direction);
         } else if (tool === 'inspector') {
           this.uiCallbacks.toggleInspector?.(action.position);
         } else if (tool === 'hierarchy') {
@@ -139,6 +290,11 @@ export class InteractionManager {
       }
 
       case 'trigger_update': {
+        // Panel intercept
+        if (this.tryPanelTriggerUpdate(action.hand, action.position, action.direction)) {
+          break; // Panel consumed
+        }
+
         const tool = this.toolSystem.getTool(action.hand);
         if (isSculptTool(tool)) {
           const strength = triggerStrength(action.value);
@@ -155,6 +311,11 @@ export class InteractionManager {
       }
 
       case 'trigger_end': {
+        // Panel intercept
+        if (this.tryPanelTriggerEnd(action.hand)) {
+          break; // Panel consumed
+        }
+
         const tool = this.toolSystem.getTool(action.hand);
         if (isSculptTool(tool)) {
           this.sculptInteraction.endStroke(action.hand);
@@ -164,7 +325,7 @@ export class InteractionManager {
         break;
       }
 
-      // --- Grip: world navigation ---
+      // --- Grip: always world navigation (panels are dragged via trigger on title bar) ---
       case 'grip_start':
         this.worldNavigation?.beginGrip(action.hand, action.position, action.rotation);
         break;

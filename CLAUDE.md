@@ -83,6 +83,18 @@ See `/design/` folder:
 4. **Multiplayer**: Shared creation spaces, real-time collaboration
 5. **Platform**: User profiles, content discovery, remixing
 
+## Test Harness (`window.__seam`)
+
+The test harness provides console/script access to all systems for testing without VR:
+
+- `exec(cmd)` - execute any command bus command
+- `scene()` / `node(id)` - serialize scene graph
+- `select(nodeId)` / `deselect()` - selection
+- `openInspector(pos?)` / `closeInspector()` - inspector panel
+- `openHierarchy(pos?)` / `closeHierarchy()` - hierarchy panel
+- `focus(target, distance?)` - move camera to look at `[x,y,z]` from `distance` (default 0.6m). Useful for inspecting UI panels up close.
+- `panelState()` - get open/closed state of panels
+
 ## Permissions
 
 - Can edit `.ts`, `.js`, `.wgsl`, `.html`, `.css`, `.json` files

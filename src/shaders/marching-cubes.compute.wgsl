@@ -63,6 +63,7 @@ fn compute_gradient(ix: u32, iy: u32, iz: u32) -> vec3<f32> {
   let py = iy + 1u;
   let pz = iz + 1u;
 
+  // Standard outward gradient: high minus low on each axis
   let gx = get_sdf_padded(px + 1u, py, pz) - get_sdf_padded(px - 1u, py, pz);
   let gy = get_sdf_padded(px, py + 1u, pz) - get_sdf_padded(px, py - 1u, pz);
   let gz = get_sdf_padded(px, py, pz + 1u) - get_sdf_padded(px, py, pz - 1u);
@@ -134,7 +135,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let sz = cz + offset.z;
     corner_samples[i] = vec3<u32>(sx, sy, sz);
     corner_vals[i] = get_sdf(sx, sy, sz);
-    if (corner_vals[i] < uniforms.iso_level) {
+    if (corner_vals[i] > uniforms.iso_level) {
       cube_index = cube_index | (1u << i);
     }
   }

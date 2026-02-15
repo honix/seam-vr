@@ -176,12 +176,13 @@ export class RenderPipeline {
         break;
       }
       case 'set_light_param': {
-        const data = this.nodeData.get(cmd.id);
-        if (data) {
-          const light = data.mesh.children.find(c => c instanceof THREE.PointLight) as THREE.PointLight | undefined;
-          if (light) {
-            if (cmd.intensity !== undefined) light.intensity = cmd.intensity;
-            if (cmd.color) light.color.setRGB(cmd.color[0], cmd.color[1], cmd.color[2]);
+        const node = sceneGraph.getNode(cmd.id);
+        if (node) {
+          if (cmd.lightType) {
+            // Light type changed — full rebuild
+            this.rebuildLight(node);
+          } else {
+            this.updateLightParams(node, cmd);
           }
         }
         break;
@@ -267,11 +268,12 @@ export class RenderPipeline {
 
   /**
    * Called when a light node is spawned.
-   * Creates a PointLight + small glowing sphere visual.
+   * Creates the appropriate light type + small glowing sphere visual.
    */
   private onLightAdded(node: SceneNode, cmd: { [key: string]: any }): void {
-    const intensity = cmd.intensity ?? 1.0;
-    const colorArr = cmd.color ?? [1, 1, 0.9];
+    const intensity = cmd.intensity ?? node.lightData?.intensity ?? 1.0;
+    const colorArr = cmd.color ?? node.lightData?.color ?? [1, 1, 0.9];
+    const lightType = cmd.lightType ?? node.lightData?.type ?? 'point';
     const threeColor = new THREE.Color(colorArr[0], colorArr[1], colorArr[2]);
 
     // Visual mesh: small glowing sphere
@@ -280,9 +282,8 @@ export class RenderPipeline {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = `light_${node.id}`;
 
-    // Attach actual PointLight as child
-    const light = new THREE.PointLight(threeColor, intensity, 10);
-    mesh.add(light);
+    // Create the actual Three.js light based on type
+    this.attachLight(mesh, lightType, threeColor, intensity);
 
     // Position
     if (cmd.position) {
@@ -297,6 +298,103 @@ export class RenderPipeline {
       sourceGeometry: geo,
       deformerStack: new DeformerStack(),
     });
+  }
+
+  /**
+   * Attach a Three.js light of the given type to a mesh.
+   */
+  private attachLight(
+    mesh: THREE.Mesh,
+    lightType: string,
+    color: THREE.Color,
+    intensity: number,
+  ): void {
+    switch (lightType) {
+      case 'directional': {
+        const light = new THREE.DirectionalLight(color, intensity);
+        // Target at local (0,0,-1) so rotating the mesh changes direction
+        const target = new THREE.Object3D();
+        target.position.set(0, 0, -1);
+        mesh.add(target);
+        light.target = target;
+        mesh.add(light);
+        break;
+      }
+      case 'spot': {
+        const light = new THREE.SpotLight(color, intensity, 10, Math.PI / 6, 0.5);
+        const target = new THREE.Object3D();
+        target.position.set(0, 0, -1);
+        mesh.add(target);
+        light.target = target;
+        mesh.add(light);
+        break;
+      }
+      default: {
+        // 'point'
+        const light = new THREE.PointLight(color, intensity, 10);
+        mesh.add(light);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Remove all light children from a mesh and recreate based on node's current light data.
+   */
+  private rebuildLight(node: SceneNode): void {
+    const data = this.nodeData.get(node.id);
+    if (!data || !node.lightData) return;
+
+    // Remove existing light children
+    const toRemove: THREE.Object3D[] = [];
+    for (const child of data.mesh.children) {
+      if (
+        child instanceof THREE.PointLight ||
+        child instanceof THREE.DirectionalLight ||
+        child instanceof THREE.SpotLight ||
+        (child instanceof THREE.Object3D && child.type === 'Object3D' && !(child instanceof THREE.Mesh))
+      ) {
+        toRemove.push(child);
+      }
+    }
+    for (const obj of toRemove) {
+      data.mesh.remove(obj);
+    }
+
+    // Recreate
+    const c = node.lightData.color;
+    const color = new THREE.Color(c[0], c[1], c[2]);
+    this.attachLight(data.mesh, node.lightData.type, color, node.lightData.intensity);
+
+    // Update visual sphere color
+    if (data.mesh.material instanceof THREE.MeshBasicMaterial) {
+      data.mesh.material.color.copy(color);
+    }
+  }
+
+  /**
+   * Update light parameters (intensity, color) without rebuilding.
+   */
+  private updateLightParams(node: SceneNode, cmd: { [key: string]: any }): void {
+    const data = this.nodeData.get(node.id);
+    if (!data) return;
+
+    // Find any light child
+    const light = data.mesh.children.find(
+      c => c instanceof THREE.PointLight ||
+           c instanceof THREE.DirectionalLight ||
+           c instanceof THREE.SpotLight
+    ) as THREE.Light | undefined;
+
+    if (light) {
+      if (cmd.intensity !== undefined) light.intensity = cmd.intensity;
+      if (cmd.color) light.color.setRGB(cmd.color[0], cmd.color[1], cmd.color[2]);
+    }
+
+    // Update visual sphere color
+    if (cmd.color && data.mesh.material instanceof THREE.MeshBasicMaterial) {
+      data.mesh.material.color.setRGB(cmd.color[0], cmd.color[1], cmd.color[2]);
+    }
   }
 
   /**
@@ -355,6 +453,9 @@ export class RenderPipeline {
           data.mesh.material as THREE.MeshStandardMaterial,
           node.material
         );
+        break;
+      case 'light':
+        this.rebuildLight(node);
         break;
     }
   }

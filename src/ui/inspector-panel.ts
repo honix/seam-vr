@@ -1,20 +1,42 @@
-// Inspector panel - shows properties of the selected layer.
-// Read-only for now (editing via controller gestures is future work).
+// Inspector panel - shows and edits properties of the selected layer.
+// Content rendered via Canvas 2D widgets on PanelCanvas.
 
 import * as THREE from 'three';
 import { FloatingPanel } from './floating-panel';
 import { SceneNode } from '../core/scene-graph';
-import { createTextTexture } from './canvas-text';
+import { CommandBus } from '../core/command-bus';
+import {
+  LabelWidget,
+  SliderWidget,
+  ColorWheelWidget,
+  DropdownWidget,
+} from './widgets';
+import type { SculptEngine } from '../sculpting/sculpt-engine';
 
-const LINE_HEIGHT = 0.025;
-const FONT_SIZE = 20;
+// Padding and widget heights in canvas pixels.
+// Actual pixel counts are derived from mesh size at 2048 PPM, but we use
+// proportional values so layout works at any panel size.
+const PAD_X = 10;
+const ROW_H = 28;
+const SLIDER_H = 52;
+const COLOR_WHEEL_H = 150;
+const DROPDOWN_H = 30;
 
 export class InspectorPanel extends FloatingPanel {
   private selectedNode: SceneNode | null = null;
-  private contentMeshes: THREE.Mesh[] = [];
+  private commandBus: CommandBus | null = null;
+  private sculptEngine: SculptEngine | null = null;
 
-  constructor(scene: THREE.Scene) {
-    super(scene, 'Inspector', 0.25, 0.35);
+  constructor(parent: THREE.Object3D) {
+    super(parent, 'Inspector', 0.25, 0.45);
+  }
+
+  setCommandBus(bus: CommandBus): void {
+    this.commandBus = bus;
+  }
+
+  setSculptEngine(engine: SculptEngine): void {
+    this.sculptEngine = engine;
   }
 
   setSelectedNode(node: SceneNode | null): void {
@@ -29,75 +51,188 @@ export class InspectorPanel extends FloatingPanel {
   }
 
   updateContent(): void {
-    // Clear existing content
-    for (const mesh of this.contentMeshes) {
-      this.contentGroup.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.MeshBasicMaterial).map?.dispose();
-      (mesh.material as THREE.Material).dispose();
-    }
-    this.contentMeshes = [];
+    this.panelCanvas.clearWidgets();
+    const cw = this.panelCanvas.canvasWidth;
+    const contentW = cw - PAD_X * 2;
 
     if (!this.selectedNode) {
-      this.addLine('No layer selected', 0);
+      this.panelCanvas.addWidget(
+        new LabelWidget(PAD_X, 10, contentW, ROW_H, { text: 'No layer selected', color: '#888888' })
+      );
+      this.panelCanvas.markDirty();
       return;
     }
 
     const node = this.selectedNode;
-    let row = 0;
+    let y = 10;
 
-    this.addLine(`Name: ${node.id}`, row++);
-    this.addLine(`Type: ${node.nodeType}`, row++);
-    this.addLine(`Layer: ${node.layerType}`, row++);
-    row++; // spacer
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: `Name: ${node.id}` })
+    );
+    y += ROW_H;
 
-    // Transform
-    const p = node.transform.position;
-    this.addLine(`Pos: ${p[0].toFixed(2)}, ${p[1].toFixed(2)}, ${p[2].toFixed(2)}`, row++);
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: `Type: ${node.nodeType}` })
+    );
+    y += ROW_H + 8;
 
-    const s = node.transform.scale;
-    this.addLine(`Scale: ${s[0].toFixed(2)}, ${s[1].toFixed(2)}, ${s[2].toFixed(2)}`, row++);
-
-    // Material (for primitives)
     if (node.layerType === 'primitive') {
-      row++;
-      const c = node.material.color;
-      this.addLine(`Color: ${c[0].toFixed(1)}, ${c[1].toFixed(1)}, ${c[2].toFixed(1)}`, row++);
-      this.addLine(`Rough: ${node.material.roughness.toFixed(2)}`, row++);
+      y = this.buildPrimitiveWidgets(node, y, contentW);
+    } else if (node.layerType === 'light') {
+      y = this.buildLightWidgets(node, y, contentW);
+    } else if (node.nodeType === 'sculpt_volume') {
+      y = this.buildSculptWidgets(y, contentW);
     }
 
-    // Light data
-    if (node.lightData) {
-      row++;
-      this.addLine(`Light: ${node.lightData.type}`, row++);
-      this.addLine(`Intensity: ${node.lightData.intensity.toFixed(1)}`, row++);
-    }
-
-    this.addLine(`Visible: ${node.visible}`, row++);
+    this.panelCanvas.markDirty();
   }
 
-  private addLine(text: string, row: number): void {
-    const tex = createTextTexture(text, {
-      fontSize: FONT_SIZE,
-      color: '#cccccc',
-      width: 256,
-      height: 24,
-      align: 'left',
-    });
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex,
-      transparent: true,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    const geo = new THREE.PlaneGeometry(this.width * 0.9, LINE_HEIGHT * 0.8);
-    const mesh = new THREE.Mesh(geo, mat);
+  private buildPrimitiveWidgets(node: SceneNode, y: number, contentW: number): number {
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: 'Color', fontSize: 16, color: '#aaaaaa' })
+    );
+    y += ROW_H;
 
-    // Position from top of content area
-    const startY = this.height / 2 - 0.05;
-    mesh.position.set(0, startY - row * LINE_HEIGHT, 0);
+    this.panelCanvas.addWidget(
+      new ColorWheelWidget(PAD_X, y, contentW, COLOR_WHEEL_H, {
+        color: [...node.material.color] as [number, number, number],
+        onChange: (color) => {
+          this.commandBus?.exec({
+            cmd: 'set_material',
+            id: node.id,
+            material: { color },
+          });
+        },
+      })
+    );
+    y += COLOR_WHEEL_H + 8;
 
-    this.contentGroup.add(mesh);
-    this.contentMeshes.push(mesh);
+    this.panelCanvas.addWidget(
+      new SliderWidget(PAD_X, y, contentW, SLIDER_H, {
+        label: 'Roughness',
+        min: 0,
+        max: 1,
+        value: node.material.roughness,
+        onChange: (value) => {
+          this.commandBus?.exec({
+            cmd: 'set_material',
+            id: node.id,
+            material: { roughness: value },
+          });
+        },
+      })
+    );
+    y += SLIDER_H;
+
+    return y;
+  }
+
+  private buildLightWidgets(node: SceneNode, y: number, contentW: number): number {
+    if (!node.lightData) return y;
+
+    const dropdown = new DropdownWidget(PAD_X, y, contentW, DROPDOWN_H, {
+      label: 'Type',
+      options: ['point', 'directional', 'spot'],
+      selectedIndex: ['point', 'directional', 'spot'].indexOf(node.lightData.type),
+      onChange: (index) => {
+        const types = ['point', 'directional', 'spot'] as const;
+        this.commandBus?.exec({
+          cmd: 'set_light_param',
+          id: node.id,
+          lightType: types[index],
+        });
+      },
+    });
+    dropdown.onExpandChange = () => {
+      this.relayoutFromDropdown();
+    };
+    this.panelCanvas.addWidget(dropdown);
+    y += DROPDOWN_H + 8;
+
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: 'Color', fontSize: 16, color: '#aaaaaa' })
+    );
+    y += ROW_H;
+
+    this.panelCanvas.addWidget(
+      new ColorWheelWidget(PAD_X, y, contentW, COLOR_WHEEL_H, {
+        color: [...node.lightData.color] as [number, number, number],
+        onChange: (color) => {
+          this.commandBus?.exec({
+            cmd: 'set_light_param',
+            id: node.id,
+            color,
+          });
+        },
+      })
+    );
+    y += COLOR_WHEEL_H + 8;
+
+    this.panelCanvas.addWidget(
+      new SliderWidget(PAD_X, y, contentW, SLIDER_H, {
+        label: 'Intensity',
+        min: 0,
+        max: 50,
+        value: node.lightData.intensity,
+        onChange: (value) => {
+          this.commandBus?.exec({
+            cmd: 'set_light_param',
+            id: node.id,
+            intensity: value,
+          });
+        },
+      })
+    );
+    y += SLIDER_H;
+
+    return y;
+  }
+
+  private buildSculptWidgets(y: number, contentW: number): number {
+    if (!this.sculptEngine) return y;
+
+    const mat = this.sculptEngine.sculptMaterial;
+
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: 'Color Tint', fontSize: 16, color: '#aaaaaa' })
+    );
+    y += ROW_H;
+
+    this.panelCanvas.addWidget(
+      new ColorWheelWidget(PAD_X, y, contentW, COLOR_WHEEL_H, {
+        color: [mat.color.r, mat.color.g, mat.color.b],
+        onChange: (color) => {
+          if (this.sculptEngine) {
+            this.sculptEngine.sculptMaterial.color.setRGB(color[0], color[1], color[2]);
+          }
+        },
+      })
+    );
+    y += COLOR_WHEEL_H + 8;
+
+    this.panelCanvas.addWidget(
+      new SliderWidget(PAD_X, y, contentW, SLIDER_H, {
+        label: 'Roughness',
+        min: 0,
+        max: 1,
+        value: mat.roughness,
+        onChange: (value) => {
+          if (this.sculptEngine) {
+            this.sculptEngine.sculptMaterial.roughness = value;
+          }
+        },
+      })
+    );
+    y += SLIDER_H;
+
+    return y;
+  }
+
+  private relayoutFromDropdown(): void {
+    this.updateContent();
+  }
+
+  override dispose(): void {
+    super.dispose();
   }
 }

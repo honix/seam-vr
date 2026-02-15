@@ -11,6 +11,7 @@ export type ToolId =
   | 'spawn_capsule'
   | 'spawn_light'
   | 'move_layer'
+  | 'select'
   | 'inspector'
   | 'hierarchy';
 
@@ -33,6 +34,7 @@ export const TOOL_REGISTRY: ToolDefinition[] = [
   { id: 'spawn_capsule',    label: 'Capsule',    color: 0xcccc44, category: 'spawn' },
   { id: 'spawn_light',      label: 'Light',      color: 0xffffaa, category: 'spawn' },
   { id: 'move_layer',       label: 'Move Layer', color: 0x4488ff, category: 'layer' },
+  { id: 'select',           label: 'Select',     color: 0xff8800, category: 'layer' },
   { id: 'inspector',        label: 'Inspector',  color: 0xaaaaaa, category: 'ui' },
   { id: 'hierarchy',        label: 'Hierarchy',  color: 0xaaaaaa, category: 'ui' },
 ];
@@ -47,6 +49,10 @@ export function isSculptTool(id: ToolId): boolean {
 
 export function isSpawnTool(id: ToolId): boolean {
   return id.startsWith('spawn_');
+}
+
+export function isSelectTool(id: ToolId): boolean {
+  return id === 'select';
 }
 
 export type ToolChangeCallback = (hand: 'left' | 'right', tool: ToolId) => void;

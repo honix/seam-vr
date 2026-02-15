@@ -23,6 +23,7 @@ export class HierarchyPanel extends FloatingPanel {
   private contentMeshes: THREE.Mesh[] = [];
   private rowNodes: SceneNode[] = [];
   private onSelectCallback: ((nodeId: string) => void) | null = null;
+  private selectedNodeId: string | null = null;
 
   constructor(scene: THREE.Scene, sceneGraph: SceneGraph) {
     super(scene, 'Hierarchy', 0.25, 0.4);
@@ -31,6 +32,13 @@ export class HierarchyPanel extends FloatingPanel {
 
   onSelect(callback: (nodeId: string) => void): void {
     this.onSelectCallback = callback;
+  }
+
+  setSelectedNodeId(id: string | null): void {
+    this.selectedNodeId = id;
+    if (this.isOpen) {
+      this.updateContent();
+    }
   }
 
   /**
@@ -80,7 +88,8 @@ export class HierarchyPanel extends FloatingPanel {
         const icon = TYPE_ICONS[child.layerType] ?? '\u25A0';
         const vis = child.visible ? '' : ' [hidden]';
         const label = `${icon} ${child.id}${vis}`;
-        this.addLine(label, row, depth);
+        const selected = child.id === this.selectedNodeId;
+        this.addLine(label, row, depth, selected);
         this.rowNodes.push(child);
         row++;
         visit(child, depth + 1);
@@ -94,10 +103,11 @@ export class HierarchyPanel extends FloatingPanel {
     }
   }
 
-  private addLine(text: string, row: number, depth: number): void {
+  private addLine(text: string, row: number, depth: number, selected = false): void {
+    const textColor = selected ? '#ff8800' : '#cccccc';
     const tex = createTextTexture(text, {
       fontSize: FONT_SIZE,
-      color: '#cccccc',
+      color: textColor,
       width: 256,
       height: 22,
       align: 'left',
@@ -114,6 +124,22 @@ export class HierarchyPanel extends FloatingPanel {
     const startY = this.height / 2 - 0.05;
     const xOffset = -this.width / 2 + 0.02 + depth * INDENT + this.width * 0.85 / 2;
     mesh.position.set(xOffset, startY - row * LINE_HEIGHT, 0);
+
+    // Selected row background highlight
+    if (selected) {
+      const bgGeo = new THREE.PlaneGeometry(this.width * 0.9, LINE_HEIGHT);
+      const bgMat = new THREE.MeshBasicMaterial({
+        color: 0x3a2a0e,
+        transparent: true,
+        opacity: 0.8,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const bgMesh = new THREE.Mesh(bgGeo, bgMat);
+      bgMesh.position.set(0, startY - row * LINE_HEIGHT, -0.001);
+      this.contentGroup.add(bgMesh);
+      this.contentMeshes.push(bgMesh);
+    }
 
     this.contentGroup.add(mesh);
     this.contentMeshes.push(mesh);

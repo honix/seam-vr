@@ -2,15 +2,18 @@
 // Routes input actions to the appropriate subsystem based on per-hand tool selection.
 // No mode-based branching; tools determine behavior.
 
+import * as THREE from 'three';
 import { XRControllerTracker } from '../xr/xr-controller';
 import { XREmulator } from '../xr/xr-emulator';
 import { XRInputHandler, InputAction } from '../xr/xr-input-handler';
-import { ToolSystem, isSculptTool, isSpawnTool } from './tool-system';
+import { ToolSystem, isSculptTool, isSpawnTool, isSelectTool } from './tool-system';
 import { BrushPreview } from './brush-preview';
 import { WorldNavigation } from './world-navigation';
 import { LayerGrabSystem } from './layer-grab-system';
+import { SelectionManager } from './selection-manager';
 import { SculptInteraction } from '../sculpting/sculpt-interaction';
 import { RadialMenu } from '../ui/radial-menu';
+import { FloatingPanel } from '../ui/floating-panel';
 import { CommandBus } from '../core/command-bus';
 import type { Vec3 } from '../types';
 
@@ -38,7 +41,13 @@ export class InteractionManager {
   private commandBus: CommandBus;
   private worldNavigation: WorldNavigation | null = null;
   private layerGrabSystem: LayerGrabSystem | null = null;
+  private selectionManager: SelectionManager | null = null;
   private uiCallbacks: UICallbacks = {};
+
+  // Panel system
+  private panels: FloatingPanel[] = [];
+  private panelGrabState: Map<string, FloatingPanel> = new Map(); // hand → grabbed panel
+  private panelDragHand: string | null = null; // hand currently dragging a panel control
 
   constructor(
     controllers: XRControllerTracker | XREmulator,
@@ -68,6 +77,14 @@ export class InteractionManager {
     this.layerGrabSystem = lgs;
   }
 
+  setSelectionManager(sm: SelectionManager): void {
+    this.selectionManager = sm;
+  }
+
+  setPanels(panels: FloatingPanel[]): void {
+    this.panels = panels;
+  }
+
   setUICallbacks(callbacks: UICallbacks): void {
     this.uiCallbacks = callbacks;
   }
@@ -82,6 +99,16 @@ export class InteractionManager {
   private toLocalRadius(radius: number): number {
     if (!this.worldNavigation) return radius;
     return radius / this.worldNavigation.getScale();
+  }
+
+  /** Build a raycaster from position + direction (for select tool and panel interaction). */
+  private buildRaycaster(position: Vec3, direction: Vec3): THREE.Raycaster {
+    const raycaster = new THREE.Raycaster();
+    raycaster.set(
+      new THREE.Vector3(position[0], position[1], position[2]),
+      new THREE.Vector3(direction[0], direction[1], direction[2]).normalize()
+    );
+    return raycaster;
   }
 
   update(): void {
@@ -130,6 +157,8 @@ export class InteractionManager {
           this.handleSpawn(tool, this.toLocalPos(action.position));
         } else if (tool === 'move_layer') {
           this.layerGrabSystem?.tryGrab(action.hand, this.toLocalPos(action.position));
+        } else if (isSelectTool(tool)) {
+          this.handleSelectStart(action.hand, action.position, action.direction);
         } else if (tool === 'inspector') {
           this.uiCallbacks.toggleInspector?.(action.position);
         } else if (tool === 'hierarchy') {
@@ -149,6 +178,17 @@ export class InteractionManager {
             strength,
             brushRadius,
           );
+        } else if (isSelectTool(tool) && this.panelDragHand === action.hand) {
+          // Forward ray to panel control drag
+          if (action.direction) {
+            const ray = this.buildRaycaster(action.position, action.direction);
+            for (const panel of this.panels) {
+              if (panel.isOpen && panel.isDraggingControl()) {
+                panel.rayInteract(ray, 'update');
+                break;
+              }
+            }
+          }
         }
         // move_layer updateGrab is handled in update() loop
         break;
@@ -160,20 +200,54 @@ export class InteractionManager {
           this.sculptInteraction.endStroke(action.hand);
         } else if (tool === 'move_layer') {
           this.layerGrabSystem?.releaseGrab(action.hand);
+        } else if (isSelectTool(tool) && this.panelDragHand === action.hand) {
+          // End panel control drag
+          for (const panel of this.panels) {
+            if (panel.isOpen && panel.isDraggingControl()) {
+              panel.rayInteract(new THREE.Raycaster(), 'end');
+              break;
+            }
+          }
+          this.panelDragHand = null;
         }
         break;
       }
 
-      // --- Grip: world navigation ---
-      case 'grip_start':
-        this.worldNavigation?.beginGrip(action.hand, action.position, action.rotation);
+      // --- Grip: panel grab intercept, then world navigation ---
+      case 'grip_start': {
+        // Check panel grab first
+        let panelGrabbed = false;
+        for (const panel of this.panels) {
+          if (panel.tryGrab(action.position)) {
+            this.panelGrabState.set(action.hand, panel);
+            panelGrabbed = true;
+            break;
+          }
+        }
+        if (!panelGrabbed) {
+          this.worldNavigation?.beginGrip(action.hand, action.position, action.rotation);
+        }
         break;
-      case 'grip_update':
-        this.worldNavigation?.updateGrip(action.hand, action.position, action.rotation);
+      }
+      case 'grip_update': {
+        const grabbedPanel = this.panelGrabState.get(action.hand);
+        if (grabbedPanel) {
+          grabbedPanel.updateGrab(action.position);
+        } else {
+          this.worldNavigation?.updateGrip(action.hand, action.position, action.rotation);
+        }
         break;
-      case 'grip_end':
-        this.worldNavigation?.endGrip(action.hand);
+      }
+      case 'grip_end': {
+        const grabbedPanel = this.panelGrabState.get(action.hand);
+        if (grabbedPanel) {
+          grabbedPanel.releaseGrab();
+          this.panelGrabState.delete(action.hand);
+        } else {
+          this.worldNavigation?.endGrip(action.hand);
+        }
         break;
+      }
 
       // --- Menu: radial menu hold/release ---
       case 'menu_hold': {
@@ -211,6 +285,30 @@ export class InteractionManager {
       case 'redo':
         this.commandBus.exec({ cmd: 'redo' });
         break;
+    }
+  }
+
+  /**
+   * Handle select tool trigger start:
+   * 1. Test open panels for ray interaction (sliders, pickers, etc.)
+   * 2. If no panel hit, raycast into scene for object selection
+   */
+  private handleSelectStart(hand: 'left' | 'right', position: Vec3, direction: Vec3): void {
+    const ray = this.buildRaycaster(position, direction);
+
+    // Test open panels first
+    for (const panel of this.panels) {
+      if (panel.isOpen && panel.rayInteract(ray, 'start')) {
+        if (panel.isDraggingControl()) {
+          this.panelDragHand = hand;
+        }
+        return; // Panel consumed the ray
+      }
+    }
+
+    // No panel hit — raycast into scene for selection
+    if (this.selectionManager) {
+      this.selectionManager.raySelect(position, direction);
     }
   }
 

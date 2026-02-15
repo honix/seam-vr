@@ -8,8 +8,8 @@ import { XREmulator } from './xr-emulator';
 export type InputAction =
   // Trigger
   | { action: 'trigger_start'; hand: 'left' | 'right'; position: Vec3; direction: Vec3; value: number }
-  | { action: 'trigger_update'; hand: 'left' | 'right'; position: Vec3; value: number }
-  | { action: 'trigger_end'; hand: 'left' | 'right'; position: Vec3 }
+  | { action: 'trigger_update'; hand: 'left' | 'right'; position: Vec3; direction: Vec3; value: number }
+  | { action: 'trigger_end'; hand: 'left' | 'right'; position: Vec3; direction: Vec3 }
   // Grip (world navigation)
   | { action: 'grip_start'; hand: 'left' | 'right'; position: Vec3; rotation: [number, number, number, number] }
   | { action: 'grip_update'; hand: 'left' | 'right'; position: Vec3; rotation: [number, number, number, number] }
@@ -73,6 +73,7 @@ export class XRInputHandler {
         action: 'trigger_update',
         hand,
         position: [...state.position] as Vec3,
+        direction: this.getForwardDirection(state),
         value: state.trigger.value,
       });
     } else if (state.triggerJustReleased) {
@@ -80,6 +81,7 @@ export class XRInputHandler {
         action: 'trigger_end',
         hand,
         position: [...state.position] as Vec3,
+        direction: this.getForwardDirection(state),
       });
     }
 

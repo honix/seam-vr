@@ -24,7 +24,7 @@ export class SculptEngine {
 
   // Three.js meshes per chunk
   private chunkMeshes: Map<string, ChunkMeshData> = new Map();
-  private material: THREE.MeshStandardMaterial;
+  readonly sculptMaterial: THREE.MeshStandardMaterial;
 
   // Brush state
   private moveBrush: MoveBrush = new MoveBrush();
@@ -53,7 +53,7 @@ export class SculptEngine {
     this.gpu = new GPUCompute(config);
 
     // Sculpt material (clay-like)
-    this.material = new THREE.MeshStandardMaterial({
+    this.sculptMaterial = new THREE.MeshStandardMaterial({
       color: 0xc4956a,
       roughness: 0.85,
       metalness: 0.05,
@@ -412,7 +412,7 @@ export class SculptEngine {
 
     if (!chunkMesh) {
       const geometry = new THREE.BufferGeometry();
-      const mesh = new THREE.Mesh(geometry, this.material);
+      const mesh = new THREE.Mesh(geometry, this.sculptMaterial);
       mesh.name = `sculpt_chunk_${key}`;
       this.sculptGroup.add(mesh);
       chunkMesh = { mesh, vertexCount: 0 };
@@ -471,7 +471,7 @@ export class SculptEngine {
       chunkMesh.mesh.geometry.dispose();
     }
     this.chunkMeshes.clear();
-    this.material.dispose();
+    this.sculptMaterial.dispose();
     this.scene.remove(this.sculptGroup);
     this.gpu.destroy();
   }

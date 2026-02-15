@@ -3,10 +3,12 @@ import {
   Transform,
   DEFAULT_TRANSFORM,
   PrimitiveType,
+  NodeType,
   MaterialData,
   DEFAULT_MATERIAL,
   DeformerType,
 } from '../types';
+import type { LayerType, LightData } from './layer-types';
 
 export interface DeformerConfig {
   type: DeformerType;
@@ -16,6 +18,7 @@ export interface DeformerConfig {
 export class SceneNode {
   id: string;
   type: PrimitiveType;
+  nodeType: NodeType;
   transform: Transform;
   params: Record<string, number>;
   deformers: DeformerConfig[];
@@ -23,6 +26,13 @@ export class SceneNode {
   parent: SceneNode | null;
   children: SceneNode[];
   mesh: THREE.Mesh | null;
+
+  // Layer system fields
+  layerType: LayerType;
+  visible: boolean;
+  locked: boolean;
+  lightData: LightData | null;
+  sculptVolumeId: string | null;
 
   constructor(
     id: string,
@@ -33,6 +43,7 @@ export class SceneNode {
   ) {
     this.id = id;
     this.type = type;
+    this.nodeType = type as NodeType;
     this.transform = {
       position: transform?.position ?? [...DEFAULT_TRANSFORM.position],
       rotation: transform?.rotation ?? [...DEFAULT_TRANSFORM.rotation],
@@ -44,6 +55,13 @@ export class SceneNode {
     this.parent = null;
     this.children = [];
     this.mesh = null;
+
+    // Layer defaults
+    this.layerType = 'primitive';
+    this.visible = true;
+    this.locked = false;
+    this.lightData = null;
+    this.sculptVolumeId = null;
   }
 }
 

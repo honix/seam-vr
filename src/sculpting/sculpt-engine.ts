@@ -32,7 +32,8 @@ export class SculptEngine {
   private _brushRadius: number = 0.02; // 2cm default
   private _brushStrength: number = 1.0;
   private _brushSmoothing: number = 0.005;
-  private _prevStrokePos: [number, number, number] | null = null;
+  // Per-hand previous stroke position for capsule brush continuity
+  private _prevStrokePos: Map<string, [number, number, number] | null> = new Map();
 
   // Concurrent stroke guard — drop frames while GPU is busy
   private strokeInFlight = false;
@@ -99,7 +100,7 @@ export class SculptEngine {
    * Only remeshes brush-modified chunks immediately (4-8 chunks, 1 GPU round).
    * Boundary neighbors are deferred to avoid 20-30 chunk remesh spikes.
    */
-  async stroke(worldPos: [number, number, number]): Promise<void> {
+  async stroke(worldPos: [number, number, number], hand: string = 'right'): Promise<void> {
     if (this._brushType === 'move') return;
     if (!this.gpu.ready) return;
     // Drop frame if previous stroke still running on GPU
@@ -108,8 +109,8 @@ export class SculptEngine {
     this.strokeInFlight = true;
     try {
       const t0 = performance.now();
-      const prevPos = this._prevStrokePos;
-      this._prevStrokePos = [...worldPos];
+      const prevPos = this._prevStrokePos.get(hand) ?? null;
+      this._prevStrokePos.set(hand, [...worldPos]);
 
       // First frame: just record position, no brush applied.
       // Capsule on frame 2 will cover both positions without double-application.
@@ -172,10 +173,85 @@ export class SculptEngine {
   }
 
   /**
+   * Apply a smooth stroke at the given world position.
+   * Uses Laplacian smoothing via double-buffer GPU compute.
+   * Same capsule brush logic and deferred remesh pattern as stroke().
+   */
+  async smoothStroke(worldPos: [number, number, number], hand: string = 'right'): Promise<void> {
+    if (!this.gpu.ready) return;
+    // Drop frame if previous stroke still running on GPU
+    if (this.strokeInFlight) return;
+
+    this.strokeInFlight = true;
+    try {
+      const t0 = performance.now();
+      const prevPos = this._prevStrokePos.get(hand) ?? null;
+      this._prevStrokePos.set(hand, [...worldPos]);
+
+      // First frame: just record position, no brush applied.
+      if (!prevPos) return;
+
+      const brush: BrushParams = {
+        type: 'smooth',
+        center: worldPos,
+        prevCenter: prevPos,
+        radius: this._brushRadius,
+        strength: this._brushStrength,
+        smoothing: this._brushSmoothing,
+      };
+
+      // Cover the full capsule extent (both endpoints + radius)
+      const r = this._brushRadius + this._brushSmoothing;
+      const coords = new Map<string, ChunkCoord>();
+      for (const c of this.volume.chunksInSphere(worldPos[0], worldPos[1], worldPos[2], r)) {
+        coords.set(chunkKey(c), c);
+      }
+      for (const c of this.volume.chunksInSphere(prevPos[0], prevPos[1], prevPos[2], r)) {
+        coords.set(chunkKey(c), c);
+      }
+      const modifiedChunks: Chunk[] = [...coords.values()].map(c => this.volume.getOrCreateChunk(c));
+
+      const t1 = performance.now();
+      await this.gpu.applySmoothBatch(modifiedChunks, brush);
+      const t2 = performance.now();
+
+      for (const chunk of modifiedChunks) {
+        chunk.dirty = true;
+        chunk.updateEmpty();
+      }
+
+      const extraChunks = this.volume.syncBoundaries(modifiedChunks);
+      const t3 = performance.now();
+
+      // Immediate: remesh only brush-modified chunks
+      await this.remeshChunks(modifiedChunks);
+
+      // Defer: queue boundary neighbors
+      for (const c of extraChunks) {
+        this.pendingRemesh.set(chunkKey(c.coord), c);
+      }
+
+      const t4 = performance.now();
+
+      const total = t4 - t0;
+      if (total > 5) {
+        console.log(
+          `[Smooth] ${total.toFixed(1)}ms total | ` +
+          `smooth: ${(t2 - t1).toFixed(1)}ms (${modifiedChunks.length} chunks) | ` +
+          `remesh: ${(t4 - t3).toFixed(1)}ms (${modifiedChunks.length} imm) | ` +
+          `deferred: ${this.pendingRemesh.size} pending`
+        );
+      }
+    } finally {
+      this.strokeInFlight = false;
+    }
+  }
+
+  /**
    * Reset stroke state (call when trigger is released).
    */
-  endStroke(): void {
-    this._prevStrokePos = null;
+  endStroke(hand: string = 'right'): void {
+    this._prevStrokePos.set(hand, null);
   }
 
   /**

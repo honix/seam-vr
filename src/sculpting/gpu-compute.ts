@@ -8,6 +8,7 @@ import type { BrushParams, SculptConfig, MeshData } from './types';
 import { EDGE_TABLE, TRI_TABLE } from './marching-tables';
 
 import sdfBrushShader from '../shaders/sdf-brush.compute.wgsl?raw';
+import sdfSmoothShader from '../shaders/sdf-smooth.compute.wgsl?raw';
 import marchingCubesShader from '../shaders/marching-cubes.compute.wgsl?raw';
 import buildPaddedShader from '../shaders/build-padded.compute.wgsl?raw';
 
@@ -28,6 +29,7 @@ const MAX_VERTICES_PER_CHUNK = 100_000;
 export class GPUCompute {
   private device: GPUDevice | null = null;
   private brushPipeline: GPUComputePipeline | null = null;
+  private smoothPipeline: GPUComputePipeline | null = null;
   private mcPipeline: GPUComputePipeline | null = null;
   private buildPaddedPipeline: GPUComputePipeline | null = null;
 
@@ -42,6 +44,8 @@ export class GPUCompute {
   // Brush phase
   private brushUniformBuffers: GPUBuffer[] = [];
   private sdfReadbackBuffers: GPUBuffer[] = [];
+  // Smooth phase (double-buffer: copy = read source, chunk sdf = write target)
+  private sdfCopyBuffers: GPUBuffer[] = [];
 
   // Remesh phase
   private sliceBuffers: GPUBuffer[] = [];
@@ -123,6 +127,12 @@ export class GPUCompute {
       compute: { module: brushModule, entryPoint: 'main' },
     });
 
+    const smoothModule = this.device.createShaderModule({ code: sdfSmoothShader });
+    this.smoothPipeline = this.device.createComputePipeline({
+      layout: 'auto',
+      compute: { module: smoothModule, entryPoint: 'main' },
+    });
+
     const mcModule = this.device.createShaderModule({ code: marchingCubesShader });
     this.mcPipeline = this.device.createComputePipeline({
       layout: 'auto',
@@ -163,6 +173,12 @@ export class GPUCompute {
       this.sdfReadbackBuffers.push(this.device.createBuffer({
         size: this.sdfSize,
         usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      }));
+
+      // SDF copy buffer for smooth double-buffer pattern (read source)
+      this.sdfCopyBuffers.push(this.device.createBuffer({
+        size: this.sdfSize,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       }));
 
       // Slice buffers (26KB each)
@@ -285,6 +301,80 @@ export class GPUCompute {
         pass.dispatchWorkgroups(workgroups, workgroups, workgroups);
         pass.end();
 
+        encoder.copyBufferToBuffer(gpuData.sdfBuffer, 0, this.sdfReadbackBuffers[i], 0, this.sdfSize);
+      }
+
+      this.device.queue.submit([encoder.finish()]);
+      await Promise.all(
+        Array.from({ length: n }, (_, i) => this.sdfReadbackBuffers[i].mapAsync(GPUMapMode.READ))
+      );
+
+      for (let i = 0; i < n; i++) {
+        const result = new Float32Array(this.sdfReadbackBuffers[i].getMappedRange());
+        chunks[offset + i].data.set(result);
+        this.sdfReadbackBuffers[i].unmap();
+      }
+    }
+  }
+
+  /**
+   * Apply Laplacian smooth to all chunks. Processes in rounds of MAX_BATCH.
+   * Double-buffer: sdfCopyBuffer (read) -> chunkSdfBuffer (write).
+   */
+  async applySmoothBatch(chunks: Chunk[], brush: BrushParams): Promise<void> {
+    if (!this.device || !this.smoothPipeline || chunks.length === 0) return;
+
+    const cs = this.config.chunkSize;
+    const vs = this.config.voxelSize;
+    const samples = cs + 1;
+    const workgroups = Math.ceil(samples / 4);
+
+    for (let offset = 0; offset < chunks.length; offset += MAX_BATCH) {
+      const n = Math.min(MAX_BATCH, chunks.length - offset);
+      const encoder = this.device.createCommandEncoder();
+
+      for (let i = 0; i < n; i++) {
+        const chunk = chunks[offset + i];
+        const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
+        const gpuData = this.getChunkBuffer(chunk, key);
+
+        // Upload SDF data to chunk's GPU buffer (will be used as write target)
+        this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+        // Copy same data to sdfCopyBuffer (read source for double-buffer)
+        this.device.queue.writeBuffer(this.sdfCopyBuffers[i], 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+
+        // Pack uniform struct matching WGSL BrushUniforms layout (80 bytes)
+        const uniformData = new ArrayBuffer(80);
+        const f32 = new Float32Array(uniformData);
+        const u32 = new Uint32Array(uniformData);
+        f32[0] = brush.center[0]; f32[1] = brush.center[1]; f32[2] = brush.center[2];
+        f32[3] = brush.radius;
+        f32[4] = brush.strength; f32[5] = brush.smoothing;
+        u32[6] = 0; u32[7] = 0; // operation unused for smooth
+        f32[8] = brush.prevCenter![0]; f32[9] = brush.prevCenter![1]; f32[10] = brush.prevCenter![2];
+        f32[11] = 0;
+        f32[12] = chunk.coord.x * cs * vs; f32[13] = chunk.coord.y * cs * vs;
+        f32[14] = chunk.coord.z * cs * vs; f32[15] = vs;
+        u32[16] = samples; u32[17] = 0; u32[18] = 0; u32[19] = 0;
+
+        this.device.queue.writeBuffer(this.brushUniformBuffers[i], 0, new Uint8Array(uniformData));
+
+        const bindGroup = this.device.createBindGroup({
+          layout: this.smoothPipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: this.brushUniformBuffers[i] } },
+            { binding: 1, resource: { buffer: this.sdfCopyBuffers[i] } },
+            { binding: 2, resource: { buffer: gpuData.sdfBuffer } },
+          ],
+        });
+
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(this.smoothPipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(workgroups, workgroups, workgroups);
+        pass.end();
+
+        // Readback smoothed result from chunkSdfBuffer
         encoder.copyBufferToBuffer(gpuData.sdfBuffer, 0, this.sdfReadbackBuffers[i], 0, this.sdfSize);
       }
 
@@ -443,6 +533,7 @@ export class GPUCompute {
     // Destroy pooled buffers
     const pools = [
       this.brushUniformBuffers, this.sdfReadbackBuffers,
+      this.sdfCopyBuffers,
       this.sliceBuffers, this.paddedBuffers,
       this.bpUniformBuffers, this.mcUniformBuffers,
       this.vertexBuffers, this.counterBuffers,

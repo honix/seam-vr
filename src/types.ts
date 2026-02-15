@@ -26,6 +26,9 @@ export type PrimitiveType =
   | 'capsule'
   | 'tube';
 
+// Extended node types (includes non-primitive layer types)
+export type NodeType = PrimitiveType | 'group' | 'light' | 'sculpt_volume';
+
 // Deformer types
 export type DeformerType = 'bend' | 'taper' | 'twist' | 'lattice' | 'noise';
 

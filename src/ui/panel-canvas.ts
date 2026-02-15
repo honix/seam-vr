@@ -39,11 +39,8 @@ export class PanelCanvas {
       map: this.texture,
       transparent: true,
       side: THREE.DoubleSide,
-      depthWrite: false,
-      depthTest: false,
     });
     this.contentMesh = new THREE.Mesh(geo, mat);
-    this.contentMesh.renderOrder = 1001;
   }
 
   get canvasWidth(): number { return this.widthPx; }

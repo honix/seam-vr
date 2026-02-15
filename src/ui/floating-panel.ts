@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { createTextTexture } from './canvas-text';
 import { PanelCanvas } from './panel-canvas';
 import type { Widget } from './widgets';
-import type { Vec3 } from '../types';
+import type { Vec3, Vec4 } from '../types';
 
 const PANEL_BG_COLOR = 0x252540;
 const PANEL_TITLE_COLOR = 0x3a3a6e;
@@ -34,6 +34,7 @@ export abstract class FloatingPanel {
   private _isGrabbed = false;
   private grabOffset: THREE.Vector3 = new THREE.Vector3();
   private _grabDistance = 0;
+  private _grabQuatOffset = new THREE.Quaternion();
 
   // Active widget for drag tracking (slider, color picker, etc.)
   private activeWidget: Widget | null = null;
@@ -59,7 +60,6 @@ export abstract class FloatingPanel {
     this.buildPanelMeshes();
 
     this.group.visible = false;
-    this.group.renderOrder = 1000;
     this.parentObj.add(this.group);
   }
 
@@ -98,11 +98,8 @@ export abstract class FloatingPanel {
       transparent: true,
       opacity: PANEL_OPACITY,
       side: THREE.DoubleSide,
-      depthWrite: false,
-      depthTest: false,
     });
     this.backgroundMesh = new THREE.Mesh(bgGeo, bgMat);
-    this.backgroundMesh.renderOrder = 1000;
     this.group.add(this.backgroundMesh);
 
     // Title bar
@@ -112,11 +109,8 @@ export abstract class FloatingPanel {
       transparent: true,
       opacity: 0.95,
       side: THREE.DoubleSide,
-      depthWrite: false,
-      depthTest: false,
     });
     this.titleBarMesh = new THREE.Mesh(titleGeo, titleMat);
-    this.titleBarMesh.renderOrder = 1001;
     this.titleBarMesh.position.set(0, height / 2 - TITLE_BAR_HEIGHT / 2, 0.001);
     this.group.add(this.titleBarMesh);
 
@@ -131,12 +125,9 @@ export abstract class FloatingPanel {
       map: titleTex,
       transparent: true,
       side: THREE.DoubleSide,
-      depthWrite: false,
-      depthTest: false,
     });
     const titleTextGeo = new THREE.PlaneGeometry(width * 0.8, TITLE_BAR_HEIGHT * 0.8);
     this.titleTextMesh = new THREE.Mesh(titleTextGeo, titleTextMat);
-    this.titleTextMesh.renderOrder = 1002;
     this.titleTextMesh.position.set(0, height / 2 - TITLE_BAR_HEIGHT / 2, 0.002);
     this.group.add(this.titleTextMesh);
 
@@ -155,11 +146,8 @@ export abstract class FloatingPanel {
       transparent: true,
       opacity: 0.95,
       side: THREE.DoubleSide,
-      depthWrite: false,
-      depthTest: false,
     });
     this.resizeHandleMesh = new THREE.Mesh(rhGeo, rhMat);
-    this.resizeHandleMesh.renderOrder = 1003;
     this.resizeHandleMesh.position.set(width / 2, -height / 2, 0.003);
     this.group.add(this.resizeHandleMesh);
 
@@ -239,7 +227,7 @@ export abstract class FloatingPanel {
     return null;
   }
 
-  beginRayGrab(raycaster: THREE.Raycaster): boolean {
+  beginRayGrab(raycaster: THREE.Raycaster, controllerRotation?: Vec4): boolean {
     if (!this._isOpen) return false;
     const hits = raycaster.intersectObject(this.titleBarMesh);
     if (hits.length === 0) return false;
@@ -249,15 +237,34 @@ export abstract class FloatingPanel {
 
     const localHit = this.parentObj.worldToLocal(hits[0].point.clone());
     this.grabOffset.copy(this.group.position).sub(localHit);
+
+    // Store rotation offset: inverse(controllerLocal) * panelQuat
+    if (controllerRotation) {
+      const controllerQuat = new THREE.Quaternion(...controllerRotation);
+      const parentWorldQuat = new THREE.Quaternion();
+      this.parentObj.getWorldQuaternion(parentWorldQuat);
+      const localControllerQuat = parentWorldQuat.clone().invert().multiply(controllerQuat);
+      this._grabQuatOffset.copy(localControllerQuat.clone().invert().multiply(this.group.quaternion));
+    }
+
     return true;
   }
 
-  updateRayGrab(raycaster: THREE.Raycaster): void {
+  updateRayGrab(raycaster: THREE.Raycaster, controllerRotation?: Vec4): void {
     if (!this._isGrabbed) return;
     const worldPoint = new THREE.Vector3();
     raycaster.ray.at(this._grabDistance, worldPoint);
     const localPoint = this.parentObj.worldToLocal(worldPoint);
     this.group.position.copy(localPoint.add(this.grabOffset));
+
+    // Apply rotation
+    if (controllerRotation) {
+      const controllerQuat = new THREE.Quaternion(...controllerRotation);
+      const parentWorldQuat = new THREE.Quaternion();
+      this.parentObj.getWorldQuaternion(parentWorldQuat);
+      const localControllerQuat = parentWorldQuat.clone().invert().multiply(controllerQuat);
+      this.group.quaternion.copy(localControllerQuat.clone().multiply(this._grabQuatOffset));
+    }
   }
 
   // --- Resize ---

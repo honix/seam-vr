@@ -57,7 +57,6 @@ export class SculptEngine {
       color: 0xc4956a,
       roughness: 0.85,
       metalness: 0.05,
-      side: THREE.DoubleSide,
     });
 
     // Group to hold all chunk meshes

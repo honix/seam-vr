@@ -159,8 +159,9 @@ export class XRInputHandler {
 
   private getForwardDirection(state: XRControllerState): Vec3 {
     const [qx, qy, qz, qw] = state.rotation;
-    const x = 2 * (qx * qz + qw * qy);
-    const y = 2 * (qy * qz - qw * qx);
+    // Rotate (0,0,-1) by quaternion: negate entire Z-column of rotation matrix
+    const x = -2 * (qx * qz + qw * qy);
+    const y = -2 * (qy * qz - qw * qx);
     const z = -(1 - 2 * (qx * qx + qy * qy));
     return [x, y, z];
   }

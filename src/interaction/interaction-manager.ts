@@ -16,7 +16,7 @@ import { SculptInteraction } from '../sculpting/sculpt-interaction';
 import { RadialMenu } from '../ui/radial-menu';
 import { FloatingPanel } from '../ui/floating-panel';
 import { CommandBus } from '../core/command-bus';
-import type { Vec3 } from '../types';
+import type { Vec3, Vec4 } from '../types';
 
 // Dead zone for trigger analog
 const TRIGGER_DEAD_ZONE = 0.1;
@@ -107,6 +107,12 @@ export class InteractionManager {
     return radius / this.worldNavigation.getScale();
   }
 
+  /** Get controller rotation quaternion for a given hand. */
+  private getControllerRotation(hand: string): Vec4 {
+    const state = hand === 'left' ? this.controllers.left : this.controllers.right;
+    return [...state.rotation] as Vec4;
+  }
+
   /** Build a raycaster from position + direction. */
   private buildRaycaster(position: Vec3, direction: Vec3): THREE.Raycaster {
     const raycaster = new THREE.Raycaster();
@@ -177,7 +183,7 @@ export class InteractionManager {
         return true;
       }
       if (hit === 'title') {
-        panel.beginRayGrab(ray);
+        panel.beginRayGrab(ray, this.getControllerRotation(hand));
         this.panelTriggerState.set(hand, { panel, mode: 'drag' });
         return true;
       }
@@ -203,7 +209,7 @@ export class InteractionManager {
 
     switch (state.mode) {
       case 'drag':
-        state.panel.updateRayGrab(ray);
+        state.panel.updateRayGrab(ray, this.getControllerRotation(hand));
         break;
       case 'control':
         state.panel.rayInteract(ray, 'update');

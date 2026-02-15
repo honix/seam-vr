@@ -152,6 +152,53 @@ export abstract class FloatingPanel {
   get isGrabbed(): boolean { return this._isGrabbed; }
 
   /**
+   * Ray hit test against the panel surface.
+   * Returns 'title' if the ray hits the title bar, 'body' if it hits the background, null if miss.
+   * Used by InteractionManager to intercept rays before they reach scene objects.
+   */
+  rayHitTest(raycaster: THREE.Raycaster): 'title' | 'body' | null {
+    if (!this._isOpen) return null;
+
+    // Test title bar first (it's in front)
+    const titleHits = raycaster.intersectObject(this.titleBarMesh);
+    if (titleHits.length > 0) return 'title';
+
+    // Test background
+    const bgHits = raycaster.intersectObject(this.backgroundMesh);
+    if (bgHits.length > 0) return 'body';
+
+    return null;
+  }
+
+  /**
+   * Begin a ray-based grab (trigger on title bar).
+   * Stores the offset between panel position and the ray hit point.
+   */
+  beginRayGrab(raycaster: THREE.Raycaster): boolean {
+    if (!this._isOpen) return false;
+    const hits = raycaster.intersectObject(this.titleBarMesh);
+    if (hits.length === 0) return false;
+
+    this._isGrabbed = true;
+    // Offset = panel position minus hit point in world space
+    this.grabOffset.copy(this.group.position).sub(hits[0].point);
+    this._grabDistance = hits[0].distance;
+    return true;
+  }
+
+  /**
+   * Update ray-based grab: project ray to stored distance, apply offset.
+   */
+  updateRayGrab(raycaster: THREE.Raycaster): void {
+    if (!this._isGrabbed) return;
+    const point = new THREE.Vector3();
+    raycaster.ray.at(this._grabDistance, point);
+    this.group.position.copy(point.add(this.grabOffset));
+  }
+
+  private _grabDistance = 0;
+
+  /**
    * Subclasses implement this to populate contentGroup.
    */
   protected abstract buildContent(): void;

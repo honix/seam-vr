@@ -78,6 +78,7 @@ export class VRColorPicker {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.wheelMesh = new THREE.Mesh(wheelGeo, wheelMat);
     this.group.add(this.wheelMesh);
@@ -100,6 +101,7 @@ export class VRColorPicker {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.barMesh = new THREE.Mesh(barGeo, barMat);
     this.barMesh.position.set(WHEEL_RADIUS + BAR_WIDTH / 2 + 0.01, 0, 0);
@@ -112,6 +114,7 @@ export class VRColorPicker {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.swatchMesh = new THREE.Mesh(swatchGeo, swatchMat);
     this.swatchMesh.position.set(

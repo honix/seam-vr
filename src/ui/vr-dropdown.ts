@@ -45,6 +45,7 @@ export class VRDropdown {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.headerMesh = new THREE.Mesh(headerGeo, headerMat);
     this.group.add(this.headerMesh);
@@ -56,6 +57,7 @@ export class VRDropdown {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.headerTextMesh = new THREE.Mesh(headerTextGeo, headerTextMat);
     this.headerTextMesh.position.z = 0.0005;
@@ -127,6 +129,7 @@ export class VRDropdown {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
 
     // Build option rows if expanded
@@ -144,6 +147,7 @@ export class VRDropdown {
           depthWrite: false,
         });
         const optMesh = new THREE.Mesh(optGeo, optMat);
+        optMesh.renderOrder = 1003;
         optMesh.position.set(0, yPos, 0);
         this.group.add(optMesh);
         this.optionMeshes.push(optMesh);
@@ -164,6 +168,7 @@ export class VRDropdown {
         });
         const textGeo = new THREE.PlaneGeometry(this.width * 0.85, ROW_HEIGHT * 0.75);
         const textMesh = new THREE.Mesh(textGeo, textMat);
+        textMesh.renderOrder = 1003;
         textMesh.position.set(0, yPos, 0.0005);
         this.group.add(textMesh);
         this.optionTextMeshes.push(textMesh);

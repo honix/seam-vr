@@ -46,8 +46,10 @@ export abstract class FloatingPanel {
       opacity: PANEL_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.backgroundMesh = new THREE.Mesh(bgGeo, bgMat);
+    this.backgroundMesh.renderOrder = 1000;
     this.group.add(this.backgroundMesh);
 
     // Title bar
@@ -58,8 +60,10 @@ export abstract class FloatingPanel {
       opacity: 0.95,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.titleBarMesh = new THREE.Mesh(titleGeo, titleMat);
+    this.titleBarMesh.renderOrder = 1001;
     this.titleBarMesh.position.set(0, height / 2 - TITLE_BAR_HEIGHT / 2, 0.001);
     this.group.add(this.titleBarMesh);
 
@@ -75,9 +79,11 @@ export abstract class FloatingPanel {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     const titleTextGeo = new THREE.PlaneGeometry(width * 0.8, TITLE_BAR_HEIGHT * 0.8);
     const titleTextMesh = new THREE.Mesh(titleTextGeo, titleTextMat);
+    titleTextMesh.renderOrder = 1002;
     titleTextMesh.position.set(0, height / 2 - TITLE_BAR_HEIGHT / 2, 0.002);
     this.group.add(titleTextMesh);
 

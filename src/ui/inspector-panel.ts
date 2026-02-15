@@ -275,9 +275,11 @@ export class InspectorPanel extends FloatingPanel {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     const geo = new THREE.PlaneGeometry(this.width * 0.9, LINE_HEIGHT * 0.8);
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.renderOrder = 1003;
 
     const startY = this.height / 2 - 0.05;
     mesh.position.set(0, startY - row * LINE_HEIGHT, 0);
@@ -289,6 +291,12 @@ export class InspectorPanel extends FloatingPanel {
   private addControl(group: THREE.Group, row: number, heightInRows: number): void {
     const startY = this.height / 2 - 0.05;
     group.position.set(0, startY - row * LINE_HEIGHT - heightInRows / 2, 0.003);
+    // Ensure all control meshes render on top like the panel
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.renderOrder = 1003;
+      }
+    });
     this.contentGroup.add(group);
   }
 

@@ -117,9 +117,11 @@ export class HierarchyPanel extends FloatingPanel {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     const geo = new THREE.PlaneGeometry(this.width * 0.85, LINE_HEIGHT * 0.85);
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.renderOrder = 1003;
 
     const startY = this.height / 2 - 0.05;
     const xOffset = -this.width / 2 + 0.02 + depth * INDENT + this.width * 0.85 / 2;
@@ -134,8 +136,10 @@ export class HierarchyPanel extends FloatingPanel {
         opacity: 0.8,
         side: THREE.DoubleSide,
         depthWrite: false,
+        depthTest: false,
       });
       const bgMesh = new THREE.Mesh(bgGeo, bgMat);
+      bgMesh.renderOrder = 1002;
       bgMesh.position.set(0, startY - row * LINE_HEIGHT, -0.001);
       this.contentGroup.add(bgMesh);
       this.contentMeshes.push(bgMesh);

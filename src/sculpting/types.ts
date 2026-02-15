@@ -1,6 +1,6 @@
 // Sculpting system types
 
-export type BrushType = 'add' | 'subtract' | 'move';
+export type BrushType = 'add' | 'subtract' | 'move' | 'smooth';
 
 export interface BrushParams {
   type: BrushType;

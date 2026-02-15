@@ -2,7 +2,7 @@ import { CommandBus, Command } from '../core/command-bus';
 import { SceneGraph } from '../core/scene-graph';
 import { serializeScene, serializeNodeById } from '../core/serialization';
 import type { SculptEngine } from '../sculpting/sculpt-engine';
-import type { ModeManager } from '../interaction/mode-manager';
+import type { ToolSystem } from '../interaction/tool-system';
 
 declare global {
   interface Window {
@@ -11,7 +11,8 @@ declare global {
       scene: () => object;
       node: (id: string) => object | null;
       sculptEngine?: SculptEngine;
-      modeManager?: ModeManager;
+      toolSystem?: ToolSystem;
+      camera?: any;
     };
   }
 }

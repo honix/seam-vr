@@ -1,72 +1,97 @@
-// Sculpt interaction handler for VR controllers
-// Routes controller input to SculptEngine brush operations.
+// Sculpt interaction handler for VR controllers.
+// Per-hand sculpt state: each hand can independently sculpt with its own tool.
+// Called by InteractionManager (not directly from the render loop).
 
-import type { XRControllerState } from '../xr/xr-controller';
 import type { SculptEngine } from './sculpt-engine';
 import type { BrushType } from './types';
+import type { ToolId } from '../interaction/tool-system';
+
+type Hand = 'left' | 'right';
+
+interface HandSculptState {
+  isSculpting: boolean;
+  isMoving: boolean;
+  brushType: BrushType;
+}
+
+const TOOL_TO_BRUSH: Partial<Record<ToolId, BrushType>> = {
+  sculpt_add: 'add',
+  sculpt_subtract: 'subtract',
+  sculpt_smooth: 'smooth',
+  sculpt_move: 'move',
+};
 
 export class SculptInteraction {
   private engine: SculptEngine;
-  private isSculpting: boolean = false;
-  private isMoving: boolean = false;
+  private handState: Map<Hand, HandSculptState> = new Map();
 
   constructor(engine: SculptEngine) {
     this.engine = engine;
+    this.handState.set('left', { isSculpting: false, isMoving: false, brushType: 'add' });
+    this.handState.set('right', { isSculpting: false, isMoving: false, brushType: 'add' });
   }
 
   /**
-   * Update sculpt interaction from controller state.
-   * Called each frame when in sculpt mode.
-   *
-   * Controls:
-   * - Trigger (right hand): Apply current brush (add/subtract)
-   * - Grip (right hand): Move brush
-   * - Button A: Cycle brush type
-   * - Thumbstick Y: Adjust brush size
+   * Begin a sculpt stroke for a hand.
    */
-  update(right: XRControllerState, left: XRControllerState): void {
-    const pos: [number, number, number] = [...right.position];
+  beginStroke(hand: Hand, toolId: ToolId, position: [number, number, number], strength: number): void {
+    const brushType = TOOL_TO_BRUSH[toolId];
+    if (!brushType) return;
 
-    // Brush type cycling via button A
-    if (right.buttonAJustPressed) {
-      this.cycleBrushType();
-    }
+    const state = this.handState.get(hand)!;
+    state.brushType = brushType;
 
-    // Brush size via left thumbstick Y
-    if (Math.abs(left.thumbstick.y) > 0.2) {
-      const delta = left.thumbstick.y * 0.0005;
-      this.engine.brushRadius = this.engine.brushRadius + delta;
-    }
-
-    // Trigger: add/subtract sculpting — apply every frame for smooth strokes
-    if (right.trigger.pressed && this.engine.brushType !== 'move') {
-      this.isSculpting = true;
-      this.engine.stroke(pos);
-    } else if (this.isSculpting) {
-      this.isSculpting = false;
-      // Reset capsule brush state and flush deferred neighbor remeshes
-      this.engine.endStroke();
-      this.engine.flushPendingRemesh();
-    }
-
-    // Grip: move brush
-    if (right.grip.pressed) {
-      if (!this.isMoving) {
-        this.isMoving = true;
-        this.engine.beginMove(pos);
-      } else {
-        this.engine.updateMove(pos);
+    if (brushType === 'move') {
+      if (!state.isMoving) {
+        state.isMoving = true;
+        this.engine.beginMove(position);
       }
-    } else if (this.isMoving) {
-      this.isMoving = false;
-      this.engine.endMove();
+    } else if (brushType === 'smooth') {
+      state.isSculpting = true;
+      state.brushType = brushType;
+      this.engine.brushStrength = strength;
+      this.engine.smoothStroke(position, hand);
+    } else {
+      state.isSculpting = true;
+      this.engine.brushType = brushType;
+      this.engine.brushStrength = strength;
+      this.engine.stroke(position, hand);
     }
   }
 
-  private cycleBrushType(): void {
-    const types: BrushType[] = ['add', 'subtract', 'move'];
-    const idx = types.indexOf(this.engine.brushType);
-    this.engine.brushType = types[(idx + 1) % types.length];
-    console.log(`[Sculpt] Brush: ${this.engine.brushType}`);
+  /**
+   * Update an ongoing sculpt stroke for a hand.
+   */
+  updateStroke(hand: Hand, position: [number, number, number], strength: number, brushRadius: number): void {
+    const state = this.handState.get(hand)!;
+
+    if (state.isMoving) {
+      this.engine.updateMove(position);
+    } else if (state.isSculpting) {
+      this.engine.brushStrength = strength;
+      this.engine.brushRadius = brushRadius;
+      if (state.brushType === 'smooth') {
+        this.engine.smoothStroke(position, hand);
+      } else {
+        this.engine.brushType = state.brushType;
+        this.engine.stroke(position, hand);
+      }
+    }
+  }
+
+  /**
+   * End a sculpt stroke for a hand.
+   */
+  endStroke(hand: Hand): void {
+    const state = this.handState.get(hand)!;
+
+    if (state.isMoving) {
+      state.isMoving = false;
+      this.engine.endMove();
+    } else if (state.isSculpting) {
+      state.isSculpting = false;
+      this.engine.endStroke(hand);
+      this.engine.flushPendingRemesh();
+    }
   }
 }

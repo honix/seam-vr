@@ -305,6 +305,102 @@ export function registerAllCommands(
     };
   });
 
+  // spawn_light - create a light node in scene graph
+  bus.register('spawn_light', (cmd: Command, sg: SceneGraph) => {
+    const id: string = cmd.id;
+    const position: Vec3 | undefined = cmd.position;
+    const lightType: string = cmd.lightType ?? 'point';
+    const intensity: number = cmd.intensity ?? 1.0;
+    const color: Vec3 = cmd.color ?? [1, 1, 1];
+
+    // Create node with 'sphere' as base type (used for visual mesh)
+    const node = new SceneNode(
+      id,
+      'sphere',
+      position ? { position } : undefined,
+    );
+    node.nodeType = 'light';
+    node.layerType = 'light';
+    node.lightData = {
+      type: lightType as 'point' | 'directional' | 'spot',
+      intensity,
+      color: [...color] as [number, number, number],
+    };
+
+    // Create small glowing sphere as visual representation
+    const geo = new THREE.SphereGeometry(0.02, 8, 6);
+    const mat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color[0], color[1], color[2]),
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    if (position) mesh.position.set(position[0], position[1], position[2]);
+    node.mesh = mesh;
+
+    sg.addNode(node);
+
+    return {
+      undo: () => { sg.removeNode(id); },
+    };
+  });
+
+  // create_group - create empty group layer
+  bus.register('create_group', (cmd: Command, sg: SceneGraph) => {
+    const id: string = cmd.id;
+    const node = new SceneNode(id, 'box');
+    node.nodeType = 'group';
+    node.layerType = 'group';
+    // Groups have no mesh
+    sg.addNode(node);
+
+    return {
+      undo: () => { sg.removeNode(id); },
+    };
+  });
+
+  // set_visibility - toggle layer visibility
+  bus.register('set_visibility', (cmd: Command, sg: SceneGraph) => {
+    const id: string = cmd.id;
+    const visible: boolean = cmd.visible;
+
+    const node = sg.getNode(id);
+    if (!node) return;
+
+    const oldVisible = node.visible;
+    node.visible = visible;
+    if (node.mesh) node.mesh.visible = visible;
+
+    sg.emit('node:updated', { node, change: 'visibility' });
+
+    return {
+      undo: () => {
+        node.visible = oldVisible;
+        if (node.mesh) node.mesh.visible = oldVisible;
+        sg.emit('node:updated', { node, change: 'visibility' });
+      },
+    };
+  });
+
+  // set_light_param - modify light properties
+  bus.register('set_light_param', (cmd: Command, sg: SceneGraph) => {
+    const id: string = cmd.id;
+    const node = sg.getNode(id);
+    if (!node || !node.lightData) return;
+
+    const oldLightData = { ...node.lightData };
+
+    if (cmd.intensity !== undefined) node.lightData.intensity = cmd.intensity;
+    if (cmd.color) node.lightData.color = [...cmd.color] as [number, number, number];
+
+    sg.emit('node:updated', { node, change: 'light' });
+
+    return {
+      undo: () => {
+        node.lightData = oldLightData;
+        sg.emit('node:updated', { node, change: 'light' });
+      },
+    };
+  });
+
   // parent - reparent a node
   bus.register('parent', (cmd: Command, sg: SceneGraph) => {
     const id: string = cmd.id;

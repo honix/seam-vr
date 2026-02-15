@@ -1,21 +1,29 @@
 // Base class for floating 3D panels in VR.
-// Semi-transparent dark background, trigger-drag title bar, abstract content area.
-// Panels live in worldGroup so they move with world navigation (pan/zoom/rotate).
+// Title bar and background are 3D meshes for raycasting/dragging.
+// Content is rendered via Canvas 2D → CanvasTexture on a single plane (PanelCanvas).
+// Resize corner at bottom-right allows 3D resizing.
 
 import * as THREE from 'three';
 import { createTextTexture } from './canvas-text';
+import { PanelCanvas } from './panel-canvas';
+import type { Widget } from './widgets';
 import type { Vec3 } from '../types';
 
-const PANEL_BG_COLOR = 0x1a1a2e;
-const PANEL_TITLE_COLOR = 0x2a2a4e;
-const PANEL_OPACITY = 0.85;
+const PANEL_BG_COLOR = 0x252540;
+const PANEL_TITLE_COLOR = 0x3a3a6e;
+const PANEL_OPACITY = 0.92;
 const TITLE_BAR_HEIGHT = 0.03;
+const RESIZE_HANDLE_SIZE = 0.02;
+const MIN_WIDTH = 0.12;
+const MIN_HEIGHT = 0.10;
 
 export abstract class FloatingPanel {
   protected group: THREE.Group = new THREE.Group();
-  protected backgroundMesh: THREE.Mesh;
-  protected titleBarMesh: THREE.Mesh;
-  protected contentGroup: THREE.Group = new THREE.Group();
+  protected backgroundMesh!: THREE.Mesh;
+  protected titleBarMesh!: THREE.Mesh;
+  private titleTextMesh!: THREE.Mesh;
+  private resizeHandleMesh!: THREE.Mesh;
+  protected panelCanvas!: PanelCanvas;
 
   protected width: number;
   protected height: number;
@@ -27,6 +35,16 @@ export abstract class FloatingPanel {
   private grabOffset: THREE.Vector3 = new THREE.Vector3();
   private _grabDistance = 0;
 
+  // Active widget for drag tracking (slider, color picker, etc.)
+  private activeWidget: Widget | null = null;
+
+  // Resize state
+  private _isResizing = false;
+  private resizeGrabDistance = 0;
+  private resizeStartWidth = 0;
+  private resizeStartHeight = 0;
+  private resizeStartLocal = new THREE.Vector3();
+
   constructor(
     parent: THREE.Object3D,
     title: string,
@@ -37,6 +55,41 @@ export abstract class FloatingPanel {
     this.width = width;
     this.height = height;
     this.parentObj = parent;
+
+    this.buildPanelMeshes();
+
+    this.group.visible = false;
+    this.group.renderOrder = 1000;
+    this.parentObj.add(this.group);
+  }
+
+  /** Build or rebuild all panel geometry from current width/height. */
+  private buildPanelMeshes(): void {
+    // --- Dispose old meshes if rebuilding ---
+    if (this.backgroundMesh) {
+      this.group.remove(this.backgroundMesh);
+      this.backgroundMesh.geometry.dispose();
+      (this.backgroundMesh.material as THREE.Material).dispose();
+    }
+    if (this.titleBarMesh) {
+      this.group.remove(this.titleBarMesh);
+      this.titleBarMesh.geometry.dispose();
+      (this.titleBarMesh.material as THREE.Material).dispose();
+    }
+    if (this.titleTextMesh) {
+      this.group.remove(this.titleTextMesh);
+      this.titleTextMesh.geometry.dispose();
+      const mat = this.titleTextMesh.material as THREE.MeshBasicMaterial;
+      mat.map?.dispose();
+      mat.dispose();
+    }
+    if (this.resizeHandleMesh) {
+      this.group.remove(this.resizeHandleMesh);
+      this.resizeHandleMesh.geometry.dispose();
+      (this.resizeHandleMesh.material as THREE.Material).dispose();
+    }
+
+    const { width, height } = this;
 
     // Background plane
     const bgGeo = new THREE.PlaneGeometry(width, height);
@@ -68,7 +121,7 @@ export abstract class FloatingPanel {
     this.group.add(this.titleBarMesh);
 
     // Title text
-    const titleTex = createTextTexture(title, {
+    const titleTex = createTextTexture(this.title, {
       fontSize: 24,
       color: '#ffffff',
       width: 256,
@@ -82,39 +135,59 @@ export abstract class FloatingPanel {
       depthTest: false,
     });
     const titleTextGeo = new THREE.PlaneGeometry(width * 0.8, TITLE_BAR_HEIGHT * 0.8);
-    const titleTextMesh = new THREE.Mesh(titleTextGeo, titleTextMat);
-    titleTextMesh.renderOrder = 1002;
-    titleTextMesh.position.set(0, height / 2 - TITLE_BAR_HEIGHT / 2, 0.002);
-    this.group.add(titleTextMesh);
+    this.titleTextMesh = new THREE.Mesh(titleTextGeo, titleTextMat);
+    this.titleTextMesh.renderOrder = 1002;
+    this.titleTextMesh.position.set(0, height / 2 - TITLE_BAR_HEIGHT / 2, 0.002);
+    this.group.add(this.titleTextMesh);
 
-    // Content area
-    this.contentGroup.position.set(0, -TITLE_BAR_HEIGHT / 2, 0.002);
-    this.group.add(this.contentGroup);
+    // Resize handle (bottom-right triangle)
+    const rhs = RESIZE_HANDLE_SIZE;
+    const rhGeo = new THREE.BufferGeometry();
+    rhGeo.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, 0,
+      -rhs, 0, 0,
+      0, rhs, 0,
+    ], 3));
+    rhGeo.setIndex([0, 1, 2]);
+    rhGeo.computeVertexNormals();
+    const rhMat = new THREE.MeshBasicMaterial({
+      color: PANEL_TITLE_COLOR,
+      transparent: true,
+      opacity: 0.95,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      depthTest: false,
+    });
+    this.resizeHandleMesh = new THREE.Mesh(rhGeo, rhMat);
+    this.resizeHandleMesh.renderOrder = 1003;
+    this.resizeHandleMesh.position.set(width / 2, -height / 2, 0.003);
+    this.group.add(this.resizeHandleMesh);
 
-    this.group.visible = false;
-    this.group.renderOrder = 1000;
-    this.parentObj.add(this.group);
+    // Content canvas: single mesh below title bar, aspect-correct
+    const contentHeight = height - TITLE_BAR_HEIGHT;
+    if (this.panelCanvas) {
+      // Resize existing canvas
+      this.panelCanvas.resizeMesh(width, contentHeight);
+    } else {
+      this.panelCanvas = new PanelCanvas(width, contentHeight);
+    }
+    this.panelCanvas.contentMesh.position.set(0, -TITLE_BAR_HEIGHT / 2, 0.002);
+    // Ensure content mesh is parented
+    if (!this.panelCanvas.contentMesh.parent) {
+      this.group.add(this.panelCanvas.contentMesh);
+    }
   }
 
   get isOpen(): boolean { return this._isOpen; }
+  get isResizing(): boolean { return this._isResizing; }
 
-  /**
-   * Open the panel at a world-space position.
-   * Converts to parent local space automatically.
-   */
   open(position: Vec3, faceToward?: Vec3): void {
-    // Convert world-space position to parent local space
     const worldPos = new THREE.Vector3(position[0], position[1], position[2]);
     const localPos = this.parentObj.worldToLocal(worldPos);
     this.group.position.copy(localPos);
 
     if (faceToward) {
-      // lookAt needs world-space target, but group is in parent space.
-      // Temporarily compute in world space.
-      const worldGroupPos = new THREE.Vector3();
-      this.group.getWorldPosition(worldGroupPos);
       const target = new THREE.Vector3(faceToward[0], faceToward[1], faceToward[2]);
-      // Convert target to parent local space for lookAt
       const localTarget = this.parentObj.worldToLocal(target);
       this.group.lookAt(localTarget);
     }
@@ -128,6 +201,8 @@ export abstract class FloatingPanel {
     this.group.visible = false;
     this._isOpen = false;
     this._isGrabbed = false;
+    this._isResizing = false;
+    this.activeWidget = null;
   }
 
   toggle(position: Vec3, faceToward?: Vec3): void {
@@ -138,9 +213,6 @@ export abstract class FloatingPanel {
     }
   }
 
-  /**
-   * Release grab.
-   */
   releaseGrab(): void {
     this._isGrabbed = false;
   }
@@ -149,27 +221,24 @@ export abstract class FloatingPanel {
 
   /**
    * Ray hit test against the panel surface.
-   * Returns 'title' if the ray hits the title bar, 'body' if it hits the background, null if miss.
-   * Raycaster works in world space; Three.js handles the parent transform internally.
+   * Returns 'title', 'resize', 'body', or null.
    */
-  rayHitTest(raycaster: THREE.Raycaster): 'title' | 'body' | null {
+  rayHitTest(raycaster: THREE.Raycaster): 'title' | 'resize' | 'body' | null {
     if (!this._isOpen) return null;
 
-    // Test title bar first (it's in front)
+    // Test resize handle first (small, in front)
+    const resizeHits = raycaster.intersectObject(this.resizeHandleMesh);
+    if (resizeHits.length > 0) return 'resize';
+
     const titleHits = raycaster.intersectObject(this.titleBarMesh);
     if (titleHits.length > 0) return 'title';
 
-    // Test background
     const bgHits = raycaster.intersectObject(this.backgroundMesh);
     if (bgHits.length > 0) return 'body';
 
     return null;
   }
 
-  /**
-   * Begin a ray-based grab (trigger on title bar).
-   * Converts world-space hit to parent local space for correct offset.
-   */
   beginRayGrab(raycaster: THREE.Raycaster): boolean {
     if (!this._isOpen) return false;
     const hits = raycaster.intersectObject(this.titleBarMesh);
@@ -178,15 +247,11 @@ export abstract class FloatingPanel {
     this._isGrabbed = true;
     this._grabDistance = hits[0].distance;
 
-    // Convert hit point to parent local space, compute offset from panel position
     const localHit = this.parentObj.worldToLocal(hits[0].point.clone());
     this.grabOffset.copy(this.group.position).sub(localHit);
     return true;
   }
 
-  /**
-   * Update ray-based grab: project ray to stored distance, convert to parent local space.
-   */
   updateRayGrab(raycaster: THREE.Raycaster): void {
     if (!this._isGrabbed) return;
     const worldPoint = new THREE.Vector3();
@@ -195,30 +260,106 @@ export abstract class FloatingPanel {
     this.group.position.copy(localPoint.add(this.grabOffset));
   }
 
-  /**
-   * Subclasses implement this to populate contentGroup.
-   */
-  protected abstract buildContent(): void;
+  // --- Resize ---
 
-  /**
-   * Subclasses implement this to refresh displayed data.
-   */
+  beginResize(raycaster: THREE.Raycaster): boolean {
+    if (!this._isOpen) return false;
+    const hits = raycaster.intersectObject(this.resizeHandleMesh);
+    if (hits.length === 0) return false;
+
+    this._isResizing = true;
+    this.resizeGrabDistance = hits[0].distance;
+    this.resizeStartWidth = this.width;
+    this.resizeStartHeight = this.height;
+
+    // Store the initial hit point in panel-local space
+    const invMatrix = new THREE.Matrix4().copy(this.group.matrixWorld).invert();
+    this.resizeStartLocal.copy(hits[0].point).applyMatrix4(invMatrix);
+    return true;
+  }
+
+  updateResize(raycaster: THREE.Raycaster): void {
+    if (!this._isResizing) return;
+
+    // Project ray to grab distance to get current world point
+    const worldPoint = new THREE.Vector3();
+    raycaster.ray.at(this.resizeGrabDistance, worldPoint);
+
+    // Convert to panel-local space
+    const invMatrix = new THREE.Matrix4().copy(this.group.matrixWorld).invert();
+    const localPoint = worldPoint.applyMatrix4(invMatrix);
+
+    // Delta from initial grab point
+    const dx = localPoint.x - this.resizeStartLocal.x;
+    const dy = localPoint.y - this.resizeStartLocal.y;
+
+    // Resize: right = wider, down = taller (dy is negative when going down in local space)
+    const newWidth = Math.max(MIN_WIDTH, this.resizeStartWidth + dx);
+    const newHeight = Math.max(MIN_HEIGHT, this.resizeStartHeight - dy);
+
+    this.resize(newWidth, newHeight);
+  }
+
+  endResize(): void {
+    this._isResizing = false;
+  }
+
+  /** Resize the panel to new dimensions, rebuilding all geometry. */
+  resize(newWidth: number, newHeight: number): void {
+    this.width = newWidth;
+    this.height = newHeight;
+    this.buildPanelMeshes();
+    this.buildContent();
+  }
+
+  protected abstract buildContent(): void;
   abstract updateContent(): void;
 
   /**
-   * Test ray interaction with panel controls.
-   * Override in subclasses with interactive elements.
-   * Returns true if the ray hit an interactive control.
+   * Test ray interaction with panel controls via PanelCanvas UV hit testing.
+   * Returns true if the ray hit an interactive widget.
    */
   rayInteract(raycaster: THREE.Raycaster, phase: 'start' | 'update' | 'end'): boolean {
-    return false;
+    if (phase === 'end') {
+      if (this.activeWidget) {
+        this.activeWidget.onPointerUp?.();
+        this.activeWidget = null;
+        this.panelCanvas.markDirty();
+      }
+      return false;
+    }
+
+    if (phase === 'update' && this.activeWidget) {
+      const hit = this.panelCanvas.hitTest(raycaster);
+      if (hit) {
+        this.activeWidget.onPointerMove?.(hit.localX, hit.localY);
+        this.panelCanvas.markDirty();
+      }
+      return true;
+    }
+
+    // 'start' phase: find which widget was hit
+    const hit = this.panelCanvas.hitTest(raycaster);
+    if (!hit) return false;
+
+    if (hit.widget.onPointerDown?.(hit.localX, hit.localY)) {
+      this.activeWidget = hit.widget;
+      this.panelCanvas.markDirty();
+      return true;
+    }
+
+    // Widget was hit but didn't capture the pointer - still consume the event
+    this.panelCanvas.markDirty();
+    return true;
   }
 
-  /**
-   * Returns true if a control drag is in progress (slider, color picker, etc.).
-   */
   isDraggingControl(): boolean {
-    return false;
+    return this.activeWidget !== null;
+  }
+
+  /** Call each frame to flush dirty canvas to GPU texture. */
+  updateCanvas(): void {
+    this.panelCanvas.updateTexture();
   }
 
   dispose(): void {
@@ -227,5 +368,11 @@ export abstract class FloatingPanel {
     (this.backgroundMesh.material as THREE.Material).dispose();
     this.titleBarMesh.geometry.dispose();
     (this.titleBarMesh.material as THREE.Material).dispose();
+    this.titleTextMesh.geometry.dispose();
+    (this.titleTextMesh.material as THREE.MeshBasicMaterial).map?.dispose();
+    (this.titleTextMesh.material as THREE.Material).dispose();
+    this.resizeHandleMesh.geometry.dispose();
+    (this.resizeHandleMesh.material as THREE.Material).dispose();
+    this.panelCanvas.dispose();
   }
 }

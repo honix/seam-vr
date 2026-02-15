@@ -241,6 +241,9 @@ async function init() {
   window.__seam.sculptEngine = sculptEngine;
   window.__seam.toolSystem = toolSystem;
   window.__seam.camera = camera;
+  (window.__seam as any)._setUI(uiManager);
+  (window.__seam as any)._setSelection(selectionManager);
+  (window.__seam as any)._setOrbitControls(orbitControls);
 
   // Wire emulator commands through the test harness
   const origExec = commandBus.exec.bind(commandBus);

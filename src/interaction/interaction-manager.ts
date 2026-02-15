@@ -101,6 +101,12 @@ export class InteractionManager {
     return this.worldNavigation.worldToLocal(worldPos) as [number, number, number];
   }
 
+  /** Transform a world-space quaternion into worldGroup local space. */
+  private toLocalQuat(worldQuat: Vec4): Vec4 {
+    if (!this.worldNavigation) return [...worldQuat] as Vec4;
+    return this.worldNavigation.worldToLocalQuat(worldQuat) as Vec4;
+  }
+
   /** Scale a scene-space radius to worldGroup local space (accounts for zoom). */
   private toLocalRadius(radius: number): number {
     if (!this.worldNavigation) return radius;
@@ -143,7 +149,7 @@ export class InteractionManager {
       for (const hand of ['left', 'right'] as const) {
         if (this.layerGrabSystem.isGrabbing(hand)) {
           const state = hand === 'left' ? this.controllers.left : this.controllers.right;
-          this.layerGrabSystem.updateGrab(hand, this.toLocalPos(state.position), state.rotation);
+          this.layerGrabSystem.updateGrab(hand, this.toLocalPos(state.position), this.toLocalQuat(state.rotation));
         }
       }
     }
@@ -271,7 +277,7 @@ export class InteractionManager {
         } else if (isSpawnTool(tool)) {
           this.handleSpawn(tool, this.toLocalPos(action.position));
         } else if (tool === 'move_layer') {
-          this.layerGrabSystem?.tryGrab(action.hand, this.toLocalPos(action.position));
+          this.layerGrabSystem?.tryGrab(action.hand, this.toLocalPos(action.position), this.toLocalQuat(this.getControllerRotation(action.hand)));
         } else if (isSelectTool(tool)) {
           // No panel hit — raycast into scene for selection
           this.selectionManager?.raySelect(action.position, action.direction);

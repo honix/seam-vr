@@ -2,7 +2,7 @@
 // Semi-transparent sphere per hand, color-coded by active sculpt tool.
 
 import * as THREE from 'three';
-import { ToolSystem, isSculptTool, getToolDef } from './tool-system';
+import { ToolSystem, isSculptTool, getToolDef, ToolId } from './tool-system';
 import type { XRControllerState } from '../xr/xr-controller';
 
 export class BrushPreview {
@@ -57,6 +57,15 @@ export class BrushPreview {
     mat: THREE.MeshBasicMaterial,
   ): void {
     const toolId = this.toolSystem.getTool(hand);
+
+    if (toolId === 'move_layer') {
+      sphere.visible = true;
+      mat.color.setHex(getToolDef('move_layer').color);
+      sphere.scale.setScalar(0.2); // matches GRAB_RADIUS
+      sphere.position.set(state.position[0], state.position[1], state.position[2]);
+      return;
+    }
+
     if (!isSculptTool(toolId)) {
       sphere.visible = false;
       return;

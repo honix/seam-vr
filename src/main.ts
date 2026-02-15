@@ -143,7 +143,7 @@ async function init() {
   const timelineController = new TimelineController();
 
   // --- UI ---
-  const uiManager = new UIManager(scene, commandBus, timelineController, toolSystem, sceneGraph);
+  const uiManager = new UIManager(scene, commandBus, timelineController, toolSystem, sceneGraph, worldGroup);
   uiManager.setSculptEngine(sculptEngine);
   uiManager.radialMenuL.setCamera(camera);
   uiManager.radialMenuR.setCamera(camera);

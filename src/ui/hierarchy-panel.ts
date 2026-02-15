@@ -25,8 +25,8 @@ export class HierarchyPanel extends FloatingPanel {
   private onSelectCallback: ((nodeId: string) => void) | null = null;
   private selectedNodeId: string | null = null;
 
-  constructor(scene: THREE.Scene, sceneGraph: SceneGraph) {
-    super(scene, 'Hierarchy', 0.25, 0.4);
+  constructor(parent: THREE.Object3D, sceneGraph: SceneGraph) {
+    super(parent, 'Hierarchy', 0.25, 0.4);
     this.sceneGraph = sceneGraph;
   }
 

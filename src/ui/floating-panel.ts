@@ -1,5 +1,6 @@
 // Base class for floating 3D panels in VR.
-// Semi-transparent dark background, grabbable title bar, abstract content area.
+// Semi-transparent dark background, trigger-drag title bar, abstract content area.
+// Panels live in worldGroup so they move with world navigation (pan/zoom/rotate).
 
 import * as THREE from 'three';
 import { createTextTexture } from './canvas-text';
@@ -9,7 +10,6 @@ const PANEL_BG_COLOR = 0x1a1a2e;
 const PANEL_TITLE_COLOR = 0x2a2a4e;
 const PANEL_OPACITY = 0.85;
 const TITLE_BAR_HEIGHT = 0.03;
-const GRAB_THRESHOLD = 0.08; // meters
 
 export abstract class FloatingPanel {
   protected group: THREE.Group = new THREE.Group();
@@ -20,13 +20,15 @@ export abstract class FloatingPanel {
   protected width: number;
   protected height: number;
   protected title: string;
+  private parentObj: THREE.Object3D;
 
   private _isOpen = false;
   private _isGrabbed = false;
   private grabOffset: THREE.Vector3 = new THREE.Vector3();
+  private _grabDistance = 0;
 
   constructor(
-    protected scene: THREE.Scene,
+    parent: THREE.Object3D,
     title: string,
     width = 0.3,
     height = 0.4,
@@ -34,6 +36,7 @@ export abstract class FloatingPanel {
     this.title = title;
     this.width = width;
     this.height = height;
+    this.parentObj = parent;
 
     // Background plane
     const bgGeo = new THREE.PlaneGeometry(width, height);
@@ -84,16 +87,32 @@ export abstract class FloatingPanel {
 
     this.group.visible = false;
     this.group.renderOrder = 1000;
-    this.scene.add(this.group);
+    this.parentObj.add(this.group);
   }
 
   get isOpen(): boolean { return this._isOpen; }
 
+  /**
+   * Open the panel at a world-space position.
+   * Converts to parent local space automatically.
+   */
   open(position: Vec3, faceToward?: Vec3): void {
-    this.group.position.set(position[0], position[1], position[2]);
+    // Convert world-space position to parent local space
+    const worldPos = new THREE.Vector3(position[0], position[1], position[2]);
+    const localPos = this.parentObj.worldToLocal(worldPos);
+    this.group.position.copy(localPos);
+
     if (faceToward) {
-      this.group.lookAt(faceToward[0], faceToward[1], faceToward[2]);
+      // lookAt needs world-space target, but group is in parent space.
+      // Temporarily compute in world space.
+      const worldGroupPos = new THREE.Vector3();
+      this.group.getWorldPosition(worldGroupPos);
+      const target = new THREE.Vector3(faceToward[0], faceToward[1], faceToward[2]);
+      // Convert target to parent local space for lookAt
+      const localTarget = this.parentObj.worldToLocal(target);
+      this.group.lookAt(localTarget);
     }
+
     this.group.visible = true;
     this._isOpen = true;
     this.buildContent();
@@ -114,35 +133,6 @@ export abstract class FloatingPanel {
   }
 
   /**
-   * Try to grab the panel's title bar.
-   * Returns true if the grip position is close enough to the title bar.
-   */
-  tryGrab(gripPosition: Vec3): boolean {
-    if (!this._isOpen) return false;
-
-    const titleWorldPos = new THREE.Vector3();
-    this.titleBarMesh.getWorldPosition(titleWorldPos);
-    const gripPos = new THREE.Vector3(...gripPosition);
-    const dist = gripPos.distanceTo(titleWorldPos);
-
-    if (dist < GRAB_THRESHOLD) {
-      this._isGrabbed = true;
-      this.grabOffset.copy(this.group.position).sub(gripPos);
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Update panel position while grabbed.
-   */
-  updateGrab(gripPosition: Vec3): void {
-    if (!this._isGrabbed) return;
-    const gripPos = new THREE.Vector3(...gripPosition);
-    this.group.position.copy(gripPos.add(this.grabOffset));
-  }
-
-  /**
    * Release grab.
    */
   releaseGrab(): void {
@@ -154,7 +144,7 @@ export abstract class FloatingPanel {
   /**
    * Ray hit test against the panel surface.
    * Returns 'title' if the ray hits the title bar, 'body' if it hits the background, null if miss.
-   * Used by InteractionManager to intercept rays before they reach scene objects.
+   * Raycaster works in world space; Three.js handles the parent transform internally.
    */
   rayHitTest(raycaster: THREE.Raycaster): 'title' | 'body' | null {
     if (!this._isOpen) return null;
@@ -172,7 +162,7 @@ export abstract class FloatingPanel {
 
   /**
    * Begin a ray-based grab (trigger on title bar).
-   * Stores the offset between panel position and the ray hit point.
+   * Converts world-space hit to parent local space for correct offset.
    */
   beginRayGrab(raycaster: THREE.Raycaster): boolean {
     if (!this._isOpen) return false;
@@ -180,23 +170,24 @@ export abstract class FloatingPanel {
     if (hits.length === 0) return false;
 
     this._isGrabbed = true;
-    // Offset = panel position minus hit point in world space
-    this.grabOffset.copy(this.group.position).sub(hits[0].point);
     this._grabDistance = hits[0].distance;
+
+    // Convert hit point to parent local space, compute offset from panel position
+    const localHit = this.parentObj.worldToLocal(hits[0].point.clone());
+    this.grabOffset.copy(this.group.position).sub(localHit);
     return true;
   }
 
   /**
-   * Update ray-based grab: project ray to stored distance, apply offset.
+   * Update ray-based grab: project ray to stored distance, convert to parent local space.
    */
   updateRayGrab(raycaster: THREE.Raycaster): void {
     if (!this._isGrabbed) return;
-    const point = new THREE.Vector3();
-    raycaster.ray.at(this._grabDistance, point);
-    this.group.position.copy(point.add(this.grabOffset));
+    const worldPoint = new THREE.Vector3();
+    raycaster.ray.at(this._grabDistance, worldPoint);
+    const localPoint = this.parentObj.worldToLocal(worldPoint);
+    this.group.position.copy(localPoint.add(this.grabOffset));
   }
-
-  private _grabDistance = 0;
 
   /**
    * Subclasses implement this to populate contentGroup.
@@ -225,7 +216,7 @@ export abstract class FloatingPanel {
   }
 
   dispose(): void {
-    this.scene.remove(this.group);
+    this.parentObj.remove(this.group);
     this.backgroundMesh.geometry.dispose();
     (this.backgroundMesh.material as THREE.Material).dispose();
     this.titleBarMesh.geometry.dispose();

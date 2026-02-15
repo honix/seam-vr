@@ -160,7 +160,7 @@ export function extractMesh(
         // Compute cube index from corner signs
         let cubeIndex = 0;
         for (let i = 0; i < 8; i++) {
-          if (cornerValues[i] < isoLevel) cubeIndex |= (1 << i);
+          if (cornerValues[i] > isoLevel) cubeIndex |= (1 << i);
         }
 
         // Skip empty cells (all inside or all outside)

@@ -46,6 +46,7 @@ export class VRSlider {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.trackMesh = new THREE.Mesh(trackGeo, trackMat);
     this.group.add(this.trackMesh);
@@ -57,6 +58,7 @@ export class VRSlider {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.fillMesh = new THREE.Mesh(fillGeo, fillMat);
     this.fillMesh.position.z = 0.0005;
@@ -69,6 +71,7 @@ export class VRSlider {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     this.handleMesh = new THREE.Mesh(handleGeo, handleMat);
     this.handleMesh.position.z = 0.001;
@@ -87,6 +90,7 @@ export class VRSlider {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     const labelGeo = new THREE.PlaneGeometry(this.trackWidth * 0.6, 0.012);
     this.labelMesh = new THREE.Mesh(labelGeo, labelMat);
@@ -110,6 +114,7 @@ export class VRSlider {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
     const valueGeo = new THREE.PlaneGeometry(this.trackWidth * 0.4, 0.012);
     this.valueMesh = new THREE.Mesh(valueGeo, valueMat);
@@ -187,6 +192,7 @@ export class VRSlider {
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
+      depthTest: false,
     });
   }
 

@@ -241,6 +241,14 @@ export class WorldNavigation {
     return [v.x, v.y, v.z];
   }
 
+  /** Transform a world-space quaternion into worldGroup local space. */
+  worldToLocalQuat(worldQuat: [number, number, number, number]): [number, number, number, number] {
+    const wq = new THREE.Quaternion(worldQuat[0], worldQuat[1], worldQuat[2], worldQuat[3]);
+    const parentQuat = this.worldGroup.quaternion.clone().invert();
+    const local = parentQuat.multiply(wq);
+    return [local.x, local.y, local.z, local.w];
+  }
+
   /** Current uniform scale of the worldGroup (for brush radius compensation). */
   getScale(): number {
     return this.worldGroup.scale.x;

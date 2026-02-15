@@ -235,16 +235,24 @@ export abstract class FloatingPanel {
     this._isGrabbed = true;
     this._grabDistance = hits[0].distance;
 
-    const localHit = this.parentObj.worldToLocal(hits[0].point.clone());
-    this.grabOffset.copy(this.group.position).sub(localHit);
+    // Convert controller rotation to parent-local space
+    const parentWorldQuat = new THREE.Quaternion();
+    this.parentObj.getWorldQuaternion(parentWorldQuat);
 
-    // Store rotation offset: inverse(controllerLocal) * panelQuat
+    const localHit = this.parentObj.worldToLocal(hits[0].point.clone());
+    const worldOffset = this.group.position.clone().sub(localHit);
+
     if (controllerRotation) {
       const controllerQuat = new THREE.Quaternion(...controllerRotation);
-      const parentWorldQuat = new THREE.Quaternion();
-      this.parentObj.getWorldQuaternion(parentWorldQuat);
       const localControllerQuat = parentWorldQuat.clone().invert().multiply(controllerQuat);
+
+      // Store position offset in controller-local space so it rotates with the hand
+      this.grabOffset.copy(worldOffset.applyQuaternion(localControllerQuat.clone().invert()));
+
+      // Store rotation offset: inverse(controllerLocal) * panelQuat
       this._grabQuatOffset.copy(localControllerQuat.clone().invert().multiply(this.group.quaternion));
+    } else {
+      this.grabOffset.copy(worldOffset);
     }
 
     return true;
@@ -255,15 +263,21 @@ export abstract class FloatingPanel {
     const worldPoint = new THREE.Vector3();
     raycaster.ray.at(this._grabDistance, worldPoint);
     const localPoint = this.parentObj.worldToLocal(worldPoint);
-    this.group.position.copy(localPoint.add(this.grabOffset));
 
-    // Apply rotation
     if (controllerRotation) {
       const controllerQuat = new THREE.Quaternion(...controllerRotation);
       const parentWorldQuat = new THREE.Quaternion();
       this.parentObj.getWorldQuaternion(parentWorldQuat);
       const localControllerQuat = parentWorldQuat.clone().invert().multiply(controllerQuat);
+
+      // Rotate offset from controller-local back to parent-local space
+      const rotatedOffset = this.grabOffset.clone().applyQuaternion(localControllerQuat);
+      this.group.position.copy(localPoint.add(rotatedOffset));
+
+      // Apply rotation
       this.group.quaternion.copy(localControllerQuat.clone().multiply(this._grabQuatOffset));
+    } else {
+      this.group.position.copy(localPoint.add(this.grabOffset));
     }
   }
 

@@ -72,6 +72,18 @@ export class InteractionManager {
     this.uiCallbacks = callbacks;
   }
 
+  /** Transform a world-space controller position into worldGroup local space. */
+  private toLocalPos(worldPos: Vec3): [number, number, number] {
+    if (!this.worldNavigation) return [...worldPos] as [number, number, number];
+    return this.worldNavigation.worldToLocal(worldPos) as [number, number, number];
+  }
+
+  /** Scale a scene-space radius to worldGroup local space (accounts for zoom). */
+  private toLocalRadius(radius: number): number {
+    if (!this.worldNavigation) return radius;
+    return radius / this.worldNavigation.getScale();
+  }
+
   update(): void {
     const actions = this.inputHandler.update();
 
@@ -92,7 +104,7 @@ export class InteractionManager {
       for (const hand of ['left', 'right'] as const) {
         if (this.layerGrabSystem.isGrabbing(hand)) {
           const state = hand === 'left' ? this.controllers.left : this.controllers.right;
-          this.layerGrabSystem.updateGrab(hand, state.position, state.rotation);
+          this.layerGrabSystem.updateGrab(hand, this.toLocalPos(state.position), state.rotation);
         }
       }
     }
@@ -111,13 +123,13 @@ export class InteractionManager {
           this.sculptInteraction.beginStroke(
             action.hand,
             tool,
-            action.position as [number, number, number],
+            this.toLocalPos(action.position),
             strength,
           );
         } else if (isSpawnTool(tool)) {
-          this.handleSpawn(tool, action.position);
+          this.handleSpawn(tool, this.toLocalPos(action.position));
         } else if (tool === 'move_layer') {
-          this.layerGrabSystem?.tryGrab(action.hand, action.position);
+          this.layerGrabSystem?.tryGrab(action.hand, this.toLocalPos(action.position));
         } else if (tool === 'inspector') {
           this.uiCallbacks.toggleInspector?.(action.position);
         } else if (tool === 'hierarchy') {
@@ -130,10 +142,10 @@ export class InteractionManager {
         const tool = this.toolSystem.getTool(action.hand);
         if (isSculptTool(tool)) {
           const strength = triggerStrength(action.value);
-          const brushRadius = this.toolSystem.getBrushRadius(action.hand);
+          const brushRadius = this.toLocalRadius(this.toolSystem.getBrushRadius(action.hand));
           this.sculptInteraction.updateStroke(
             action.hand,
-            action.position as [number, number, number],
+            this.toLocalPos(action.position),
             strength,
             brushRadius,
           );

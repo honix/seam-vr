@@ -54,9 +54,15 @@ Post-processing (screen-space normal smoothing for seams, AO, bloom)
 WebXR stereo output (VR) or canvas (flat screen)
 ```
 
-### Modes
+### VR interaction
 
-Mode manager cycles through: `handle` → `free-deform` → `sculpt` → `play`. Sculpt mode routes input to SculptInteraction/SculptEngine; other modes use InteractionManager for primitive manipulation.
+**Per-hand tool system** (replaces old ModeManager). Each hand independently selects a tool: sculpt (add/subtract/smooth/move), spawn (cube/sphere/capsule/light), move_layer, inspector, hierarchy. `InteractionManager` routes input to subsystems based on each hand's active tool.
+
+**Input mapping**: trigger = tool use, grip = world navigation, Y/B hold-release = radial menu (tool selection), thumbstick Y = brush radius, thumbstick X (left) = undo/redo.
+
+**World navigation** moves `worldGroup`, not the camera rig. This preserves canonical world coordinates for multiplayer and avoids IPD distortion on scale. Single grip: pan + rotate (grab-and-twist via controller orientation). Dual grip: scale + full 3-axis rotation around midpoint (orthonormal frame from positions + averaged controller up vectors). Controller positions are transformed to worldGroup local space before passing to sculpt/spawn/grab systems. Brush radius compensates for world scale.
+
+**VR UI**: Radial menu (hold button, point, release to select) with canvas-text labels. Floating panels (inspector, hierarchy) with grabbable title bars, face toward camera on open.
 
 ## Key Design Docs
 

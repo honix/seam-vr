@@ -29,6 +29,7 @@ export class RadialMenu {
   private scene: THREE.Scene;
   private toolSystem: ToolSystem;
   private hand: 'left' | 'right';
+  private camera: THREE.Camera | null = null;
 
   private group: THREE.Group = new THREE.Group();
   private items: MenuItem[] = [];
@@ -103,18 +104,18 @@ export class RadialMenu {
     }
   }
 
-  open(position: Vec3, cameraPosition?: Vec3): void {
+  setCamera(camera: THREE.Camera): void {
+    this.camera = camera;
+  }
+
+  open(position: Vec3): void {
     this.group.position.set(position[0], position[1], position[2]);
     this.group.visible = true;
     this.isOpen = true;
     this.highlightedIndex = -1;
     this.resetHighlights();
     this.updateActiveRings();
-
-    // Billboard toward camera
-    if (cameraPosition) {
-      this.group.lookAt(cameraPosition[0], cameraPosition[1], cameraPosition[2]);
-    }
+    this.faceCamera();
   }
 
   close(): ToolId | null {
@@ -168,6 +169,13 @@ export class RadialMenu {
         this.items[closestIdx].discMesh.scale.setScalar(1.3);
       }
     }
+  }
+
+  private faceCamera(): void {
+    if (!this.camera) return;
+    const camPos = new THREE.Vector3();
+    this.camera.getWorldPosition(camPos);
+    this.group.lookAt(camPos);
   }
 
   private updateActiveRings(): void {

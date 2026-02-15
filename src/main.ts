@@ -134,6 +134,8 @@ async function init() {
 
   // --- UI ---
   const uiManager = new UIManager(scene, commandBus, timelineController, toolSystem, sceneGraph);
+  uiManager.radialMenuL.setCamera(camera);
+  uiManager.radialMenuR.setCamera(camera);
 
   // --- Input Handlers ---
   const inputHandler = new XRInputHandler(xrEmulator);

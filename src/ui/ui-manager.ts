@@ -26,14 +26,15 @@ export class UIManager {
     timelineController: TimelineController,
     toolSystem: ToolSystem,
     sceneGraph: SceneGraph,
+    worldGroup: THREE.Object3D,
   ) {
     this.sceneGraph = sceneGraph;
     this.radialMenuL = new RadialMenu(scene, toolSystem, 'left');
     this.radialMenuR = new RadialMenu(scene, toolSystem, 'right');
     this.timeline = new TimelinePanel(scene, timelineController);
-    this.inspector = new InspectorPanel(scene);
+    this.inspector = new InspectorPanel(worldGroup);
     this.inspector.setCommandBus(commandBus);
-    this.hierarchy = new HierarchyPanel(scene, sceneGraph);
+    this.hierarchy = new HierarchyPanel(worldGroup, sceneGraph);
   }
 
   setSculptEngine(engine: SculptEngine): void {

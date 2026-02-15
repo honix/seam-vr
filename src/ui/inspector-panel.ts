@@ -28,8 +28,8 @@ export class InspectorPanel extends FloatingPanel {
   private commandBus: CommandBus | null = null;
   private sculptEngine: SculptEngine | null = null;
 
-  constructor(scene: THREE.Scene) {
-    super(scene, 'Inspector', 0.25, 0.45);
+  constructor(parent: THREE.Object3D) {
+    super(parent, 'Inspector', 0.25, 0.45);
   }
 
   setCommandBus(bus: CommandBus): void {

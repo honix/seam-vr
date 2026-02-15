@@ -53,7 +53,6 @@ export class InteractionManager {
 
   // Panel system
   private panels: FloatingPanel[] = [];
-  private panelGrabState: Map<string, FloatingPanel> = new Map(); // hand → grip-grabbed panel
   private panelTriggerState: Map<string, PanelTriggerState> = new Map(); // hand → trigger panel interaction
 
   constructor(
@@ -303,40 +302,16 @@ export class InteractionManager {
         break;
       }
 
-      // --- Grip: panel grab intercept, then world navigation ---
-      case 'grip_start': {
-        let panelGrabbed = false;
-        for (const panel of this.panels) {
-          if (panel.tryGrab(action.position)) {
-            this.panelGrabState.set(action.hand, panel);
-            panelGrabbed = true;
-            break;
-          }
-        }
-        if (!panelGrabbed) {
-          this.worldNavigation?.beginGrip(action.hand, action.position, action.rotation);
-        }
+      // --- Grip: always world navigation (panels are dragged via trigger on title bar) ---
+      case 'grip_start':
+        this.worldNavigation?.beginGrip(action.hand, action.position, action.rotation);
         break;
-      }
-      case 'grip_update': {
-        const grabbedPanel = this.panelGrabState.get(action.hand);
-        if (grabbedPanel) {
-          grabbedPanel.updateGrab(action.position);
-        } else {
-          this.worldNavigation?.updateGrip(action.hand, action.position, action.rotation);
-        }
+      case 'grip_update':
+        this.worldNavigation?.updateGrip(action.hand, action.position, action.rotation);
         break;
-      }
-      case 'grip_end': {
-        const grabbedPanel = this.panelGrabState.get(action.hand);
-        if (grabbedPanel) {
-          grabbedPanel.releaseGrab();
-          this.panelGrabState.delete(action.hand);
-        } else {
-          this.worldNavigation?.endGrip(action.hand);
-        }
+      case 'grip_end':
+        this.worldNavigation?.endGrip(action.hand);
         break;
-      }
 
       // --- Menu: radial menu hold/release ---
       case 'menu_hold': {

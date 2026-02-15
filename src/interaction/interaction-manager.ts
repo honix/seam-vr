@@ -34,7 +34,7 @@ export interface UICallbacks {
 // Per-hand state when trigger is interacting with a panel
 interface PanelTriggerState {
   panel: FloatingPanel;
-  mode: 'drag' | 'control' | 'block'; // drag=title bar, control=slider/picker, block=body hit
+  mode: 'drag' | 'control' | 'resize' | 'block';
 }
 
 export class InteractionManager {
@@ -169,8 +169,13 @@ export class InteractionManager {
         return true;
       }
 
-      // Then test panel surface (title bar vs body)
+      // Then test panel surface (title bar, resize, body)
       const hit = panel.rayHitTest(ray);
+      if (hit === 'resize') {
+        panel.beginResize(ray);
+        this.panelTriggerState.set(hand, { panel, mode: 'resize' });
+        return true;
+      }
       if (hit === 'title') {
         panel.beginRayGrab(ray);
         this.panelTriggerState.set(hand, { panel, mode: 'drag' });
@@ -203,6 +208,9 @@ export class InteractionManager {
       case 'control':
         state.panel.rayInteract(ray, 'update');
         break;
+      case 'resize':
+        state.panel.updateResize(ray);
+        break;
       case 'block':
         // Do nothing, just consume the event
         break;
@@ -224,6 +232,9 @@ export class InteractionManager {
         break;
       case 'control':
         state.panel.rayInteract(new THREE.Raycaster(), 'end');
+        break;
+      case 'resize':
+        state.panel.endResize();
         break;
     }
 

@@ -1,30 +1,29 @@
 // Inspector panel - shows and edits properties of the selected layer.
-// Interactive controls: sliders, color pickers, dropdowns per node type.
+// Content rendered via Canvas 2D widgets on PanelCanvas.
 
 import * as THREE from 'three';
 import { FloatingPanel } from './floating-panel';
 import { SceneNode } from '../core/scene-graph';
 import { CommandBus } from '../core/command-bus';
-import { VRSlider } from './vr-slider';
-import { VRColorPicker } from './vr-color-picker';
-import { VRDropdown } from './vr-dropdown';
-import { createTextTexture } from './canvas-text';
+import {
+  LabelWidget,
+  SliderWidget,
+  ColorWheelWidget,
+  DropdownWidget,
+} from './widgets';
 import type { SculptEngine } from '../sculpting/sculpt-engine';
 
-const LINE_HEIGHT = 0.025;
-const FONT_SIZE = 20;
+// Padding and widget heights in canvas pixels.
+// Actual pixel counts are derived from mesh size at 2048 PPM, but we use
+// proportional values so layout works at any panel size.
+const PAD_X = 10;
+const ROW_H = 28;
+const SLIDER_H = 52;
+const COLOR_WHEEL_H = 150;
+const DROPDOWN_H = 30;
 
 export class InspectorPanel extends FloatingPanel {
   private selectedNode: SceneNode | null = null;
-  private contentMeshes: THREE.Mesh[] = [];
-
-  // Interactive controls
-  private sliders: VRSlider[] = [];
-  private colorPickers: VRColorPicker[] = [];
-  private dropdowns: VRDropdown[] = [];
-  private _isDragging = false;
-
-  // Dependencies
   private commandBus: CommandBus | null = null;
   private sculptEngine: SculptEngine | null = null;
 
@@ -52,80 +51,91 @@ export class InspectorPanel extends FloatingPanel {
   }
 
   updateContent(): void {
-    // Clear existing content
-    this.clearControls();
+    this.panelCanvas.clearWidgets();
+    const cw = this.panelCanvas.canvasWidth;
+    const contentW = cw - PAD_X * 2;
 
     if (!this.selectedNode) {
-      this.addLine('No layer selected', 0);
+      this.panelCanvas.addWidget(
+        new LabelWidget(PAD_X, 10, contentW, ROW_H, { text: 'No layer selected', color: '#888888' })
+      );
+      this.panelCanvas.markDirty();
       return;
     }
 
     const node = this.selectedNode;
-    let row = 0;
+    let y = 10;
 
-    this.addLine(`Name: ${node.id}`, row++);
-    this.addLine(`Type: ${node.nodeType}`, row++);
-    row++; // spacer
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: `Name: ${node.id}` })
+    );
+    y += ROW_H;
+
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: `Type: ${node.nodeType}` })
+    );
+    y += ROW_H + 8;
 
     if (node.layerType === 'primitive') {
-      this.buildPrimitiveControls(node, row);
+      y = this.buildPrimitiveWidgets(node, y, contentW);
     } else if (node.layerType === 'light') {
-      this.buildLightControls(node, row);
+      y = this.buildLightWidgets(node, y, contentW);
     } else if (node.nodeType === 'sculpt_volume') {
-      this.buildSculptControls(row);
+      y = this.buildSculptWidgets(y, contentW);
     }
+
+    this.panelCanvas.markDirty();
   }
 
-  private buildPrimitiveControls(node: SceneNode, startRow: number): void {
-    let row = startRow;
+  private buildPrimitiveWidgets(node: SceneNode, y: number, contentW: number): number {
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: 'Color', fontSize: 16, color: '#aaaaaa' })
+    );
+    y += ROW_H;
 
-    // Color picker
-    this.addLine('Color', row++);
-    const colorPicker = new VRColorPicker({
-      color: [...node.material.color] as [number, number, number],
-      onChange: (color) => {
-        this.commandBus?.exec({
-          cmd: 'set_material',
-          id: node.id,
-          material: { color },
-        });
-      },
-    });
-    this.addControl(colorPicker.group, row, 0.1);
-    this.colorPickers.push(colorPicker);
-    row += 5; // color picker takes ~5 rows of space
+    this.panelCanvas.addWidget(
+      new ColorWheelWidget(PAD_X, y, contentW, COLOR_WHEEL_H, {
+        color: [...node.material.color] as [number, number, number],
+        onChange: (color) => {
+          this.commandBus?.exec({
+            cmd: 'set_material',
+            id: node.id,
+            material: { color },
+          });
+        },
+      })
+    );
+    y += COLOR_WHEEL_H + 8;
 
-    // Roughness slider
-    const roughnessSlider = new VRSlider({
-      label: 'Roughness',
-      min: 0,
-      max: 1,
-      value: node.material.roughness,
-      width: 0.18,
-      onChange: (value) => {
-        this.commandBus?.exec({
-          cmd: 'set_material',
-          id: node.id,
-          material: { roughness: value },
-        });
-      },
-    });
-    this.addControl(roughnessSlider.group, row, 0.04);
-    this.sliders.push(roughnessSlider);
+    this.panelCanvas.addWidget(
+      new SliderWidget(PAD_X, y, contentW, SLIDER_H, {
+        label: 'Roughness',
+        min: 0,
+        max: 1,
+        value: node.material.roughness,
+        onChange: (value) => {
+          this.commandBus?.exec({
+            cmd: 'set_material',
+            id: node.id,
+            material: { roughness: value },
+          });
+        },
+      })
+    );
+    y += SLIDER_H;
+
+    return y;
   }
 
-  private buildLightControls(node: SceneNode, startRow: number): void {
-    if (!node.lightData) return;
-    let row = startRow;
+  private buildLightWidgets(node: SceneNode, y: number, contentW: number): number {
+    if (!node.lightData) return y;
 
-    // Light type dropdown
-    const typeDropdown = new VRDropdown({
+    const dropdown = new DropdownWidget(PAD_X, y, contentW, DROPDOWN_H, {
       label: 'Type',
       options: ['point', 'directional', 'spot'],
       selectedIndex: ['point', 'directional', 'spot'].indexOf(node.lightData.type),
-      width: 0.18,
       onChange: (index) => {
-        const types = ['point', 'directional', 'spot'];
+        const types = ['point', 'directional', 'spot'] as const;
         this.commandBus?.exec({
           cmd: 'set_light_param',
           id: node.id,
@@ -133,207 +143,96 @@ export class InspectorPanel extends FloatingPanel {
         });
       },
     });
-    this.addControl(typeDropdown.group, row, 0.03);
-    this.dropdowns.push(typeDropdown);
-    row += 2;
+    dropdown.onExpandChange = () => {
+      this.relayoutFromDropdown();
+    };
+    this.panelCanvas.addWidget(dropdown);
+    y += DROPDOWN_H + 8;
 
-    // Color picker
-    this.addLine('Color', row++);
-    const colorPicker = new VRColorPicker({
-      color: [...node.lightData.color] as [number, number, number],
-      onChange: (color) => {
-        this.commandBus?.exec({
-          cmd: 'set_light_param',
-          id: node.id,
-          color,
-        });
-      },
-    });
-    this.addControl(colorPicker.group, row, 0.1);
-    this.colorPickers.push(colorPicker);
-    row += 5;
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: 'Color', fontSize: 16, color: '#aaaaaa' })
+    );
+    y += ROW_H;
 
-    // Intensity slider
-    const intensitySlider = new VRSlider({
-      label: 'Intensity',
-      min: 0,
-      max: 50,
-      value: node.lightData.intensity,
-      width: 0.18,
-      onChange: (value) => {
-        this.commandBus?.exec({
-          cmd: 'set_light_param',
-          id: node.id,
-          intensity: value,
-        });
-      },
-    });
-    this.addControl(intensitySlider.group, row, 0.04);
-    this.sliders.push(intensitySlider);
+    this.panelCanvas.addWidget(
+      new ColorWheelWidget(PAD_X, y, contentW, COLOR_WHEEL_H, {
+        color: [...node.lightData.color] as [number, number, number],
+        onChange: (color) => {
+          this.commandBus?.exec({
+            cmd: 'set_light_param',
+            id: node.id,
+            color,
+          });
+        },
+      })
+    );
+    y += COLOR_WHEEL_H + 8;
+
+    this.panelCanvas.addWidget(
+      new SliderWidget(PAD_X, y, contentW, SLIDER_H, {
+        label: 'Intensity',
+        min: 0,
+        max: 50,
+        value: node.lightData.intensity,
+        onChange: (value) => {
+          this.commandBus?.exec({
+            cmd: 'set_light_param',
+            id: node.id,
+            intensity: value,
+          });
+        },
+      })
+    );
+    y += SLIDER_H;
+
+    return y;
   }
 
-  private buildSculptControls(startRow: number): void {
-    if (!this.sculptEngine) return;
-    let row = startRow;
+  private buildSculptWidgets(y: number, contentW: number): number {
+    if (!this.sculptEngine) return y;
 
-    // Color tint picker
-    this.addLine('Color Tint', row++);
     const mat = this.sculptEngine.sculptMaterial;
-    const colorPicker = new VRColorPicker({
-      color: [mat.color.r, mat.color.g, mat.color.b],
-      onChange: (color) => {
-        if (this.sculptEngine) {
-          this.sculptEngine.sculptMaterial.color.setRGB(color[0], color[1], color[2]);
-        }
-      },
-    });
-    this.addControl(colorPicker.group, row, 0.1);
-    this.colorPickers.push(colorPicker);
-    row += 5;
 
-    // Roughness slider
-    const roughnessSlider = new VRSlider({
-      label: 'Roughness',
-      min: 0,
-      max: 1,
-      value: mat.roughness,
-      width: 0.18,
-      onChange: (value) => {
-        if (this.sculptEngine) {
-          this.sculptEngine.sculptMaterial.roughness = value;
-        }
-      },
-    });
-    this.addControl(roughnessSlider.group, row, 0.04);
-    this.sliders.push(roughnessSlider);
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, { text: 'Color Tint', fontSize: 16, color: '#aaaaaa' })
+    );
+    y += ROW_H;
+
+    this.panelCanvas.addWidget(
+      new ColorWheelWidget(PAD_X, y, contentW, COLOR_WHEEL_H, {
+        color: [mat.color.r, mat.color.g, mat.color.b],
+        onChange: (color) => {
+          if (this.sculptEngine) {
+            this.sculptEngine.sculptMaterial.color.setRGB(color[0], color[1], color[2]);
+          }
+        },
+      })
+    );
+    y += COLOR_WHEEL_H + 8;
+
+    this.panelCanvas.addWidget(
+      new SliderWidget(PAD_X, y, contentW, SLIDER_H, {
+        label: 'Roughness',
+        min: 0,
+        max: 1,
+        value: mat.roughness,
+        onChange: (value) => {
+          if (this.sculptEngine) {
+            this.sculptEngine.sculptMaterial.roughness = value;
+          }
+        },
+      })
+    );
+    y += SLIDER_H;
+
+    return y;
   }
 
-  // --- Ray interaction for interactive controls ---
-
-  override rayInteract(raycaster: THREE.Raycaster, phase: 'start' | 'update' | 'end'): boolean {
-    if (phase === 'end') {
-      this._isDragging = false;
-      return false;
-    }
-
-    // Test sliders
-    for (const slider of this.sliders) {
-      const t = slider.rayTest(raycaster);
-      if (t !== null) {
-        slider.setNormalized(t);
-        if (phase === 'start') this._isDragging = true;
-        return true;
-      }
-    }
-
-    // Test color pickers
-    for (const picker of this.colorPickers) {
-      const wheelHit = picker.rayTestWheel(raycaster);
-      if (wheelHit) {
-        if (phase === 'start') this._isDragging = true;
-        return true;
-      }
-      const barHit = picker.rayTestBrightness(raycaster);
-      if (barHit !== null) {
-        if (phase === 'start') this._isDragging = true;
-        return true;
-      }
-    }
-
-    // Test dropdowns
-    for (const dropdown of this.dropdowns) {
-      const hit = dropdown.rayTest(raycaster);
-      if (hit !== null) {
-        if (hit === 'header') {
-          dropdown.toggle();
-        } else {
-          dropdown.select(hit);
-        }
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  override isDraggingControl(): boolean {
-    return this._isDragging;
-  }
-
-  // --- Helpers ---
-
-  private addLine(text: string, row: number): void {
-    const tex = createTextTexture(text, {
-      fontSize: FONT_SIZE,
-      color: '#cccccc',
-      width: 256,
-      height: 24,
-      align: 'left',
-    });
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex,
-      transparent: true,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      depthTest: false,
-    });
-    const geo = new THREE.PlaneGeometry(this.width * 0.9, LINE_HEIGHT * 0.8);
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.renderOrder = 1003;
-
-    const startY = this.height / 2 - 0.05;
-    mesh.position.set(0, startY - row * LINE_HEIGHT, 0);
-
-    this.contentGroup.add(mesh);
-    this.contentMeshes.push(mesh);
-  }
-
-  private addControl(group: THREE.Group, row: number, heightInRows: number): void {
-    const startY = this.height / 2 - 0.05;
-    group.position.set(0, startY - row * LINE_HEIGHT - heightInRows / 2, 0.003);
-    // Ensure all control meshes render on top like the panel
-    group.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.renderOrder = 1003;
-      }
-    });
-    this.contentGroup.add(group);
-  }
-
-  private clearControls(): void {
-    // Clear text meshes
-    for (const mesh of this.contentMeshes) {
-      this.contentGroup.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.MeshBasicMaterial).map?.dispose();
-      (mesh.material as THREE.Material).dispose();
-    }
-    this.contentMeshes = [];
-
-    // Remove and dispose interactive controls
-    for (const slider of this.sliders) {
-      this.contentGroup.remove(slider.group);
-      slider.dispose();
-    }
-    this.sliders = [];
-
-    for (const picker of this.colorPickers) {
-      this.contentGroup.remove(picker.group);
-      picker.dispose();
-    }
-    this.colorPickers = [];
-
-    for (const dropdown of this.dropdowns) {
-      this.contentGroup.remove(dropdown.group);
-      dropdown.dispose();
-    }
-    this.dropdowns = [];
-
-    this._isDragging = false;
+  private relayoutFromDropdown(): void {
+    this.updateContent();
   }
 
   override dispose(): void {
-    this.clearControls();
     super.dispose();
   }
 }

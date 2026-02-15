@@ -59,5 +59,15 @@ export class UIManager {
 
   update(): void {
     this.timeline.update();
+    this.updatePanels();
+  }
+
+  private updatePanels(): void {
+    if (this.inspector.isOpen) {
+      this.inspector.updateCanvas();
+    }
+    if (this.hierarchy.isOpen) {
+      this.hierarchy.updateCanvas();
+    }
   }
 }

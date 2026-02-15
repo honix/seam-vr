@@ -388,6 +388,7 @@ export function registerAllCommands(
 
     const oldLightData = { ...node.lightData };
 
+    if (cmd.lightType) node.lightData.type = cmd.lightType;
     if (cmd.intensity !== undefined) node.lightData.intensity = cmd.intensity;
     if (cmd.color) node.lightData.color = [...cmd.color] as [number, number, number];
 

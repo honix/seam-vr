@@ -161,6 +161,22 @@ export abstract class FloatingPanel {
    */
   abstract updateContent(): void;
 
+  /**
+   * Test ray interaction with panel controls.
+   * Override in subclasses with interactive elements.
+   * Returns true if the ray hit an interactive control.
+   */
+  rayInteract(raycaster: THREE.Raycaster, phase: 'start' | 'update' | 'end'): boolean {
+    return false;
+  }
+
+  /**
+   * Returns true if a control drag is in progress (slider, color picker, etc.).
+   */
+  isDraggingControl(): boolean {
+    return false;
+  }
+
   dispose(): void {
     this.scene.remove(this.group);
     this.backgroundMesh.geometry.dispose();

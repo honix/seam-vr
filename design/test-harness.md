@@ -4,7 +4,7 @@
 
 VR apps are notoriously hard to test. Manual testing requires putting on a headset and physically performing actions. This doesn't scale, breaks CI, and makes regressions invisible until a human stumbles into them.
 
-We need a way to drive the entire app — XR input, UI, sculpting, animation, rendering — through commands that a script (or an AI agent) can issue without a human in the loop.
+We need a way to drive the entire app -- XR input, UI, sculpting, animation, rendering -- through commands that a script (or an AI agent) can issue without a human in the loop.
 
 ## Design Principle: Command Bus
 
@@ -31,27 +31,16 @@ Commands are JSON objects sent to `window.__seam.exec()` or via WebSocket.
 ### Scene Commands
 
 ```typescript
-// Spawn a primitive
-{ cmd: "spawn", type: "cylinder", id: "arm-left",
-  position: [0, 1.2, 0], rotation: [0, 0, 90] }
-
-// Modify parameters
-{ cmd: "set_param", target: "arm-left",
-  params: { radiusTop: 0.08, radiusBottom: 0.12, height: 0.6 } }
-
-// Apply deformer
-{ cmd: "add_deformer", target: "arm-left",
-  deformer: { type: "bend", angle: 25, axis: "x" } }
-
-// Set material
-{ cmd: "set_material", target: "arm-left",
+// Set material on sculpt volume
+{ cmd: "set_material", target: "sculpt_volume",
   material: { color: "#cc8844", roughness: 0.8 } }
 
-// Parent primitives
-{ cmd: "parent", child: "arm-left", parent: "torso" }
+// Set transform
+{ cmd: "set_transform", id: "sculpt_volume",
+  position: [0, 1.2, 0], rotation: [0, 0, 0] }
 
 // Delete
-{ cmd: "delete", target: "arm-left" }
+{ cmd: "delete", target: "sculpt_volume" }
 
 // Undo / redo
 { cmd: "undo" }
@@ -93,7 +82,6 @@ Drive the radial palette menu and panels without simulating spatial hand movemen
 { cmd: "ui_palette", action: "select", item: "sphere" }
 
 // Toggle mode
-{ cmd: "ui_mode", mode: "handle" }   // or "free_deform"
 { cmd: "ui_mode", mode: "play" }     // or "edit"
 
 // Timeline controls
@@ -126,13 +114,13 @@ Drive the radial palette menu and panels without simulating spatial hand movemen
 Read state back for assertions.
 
 ```typescript
-// Get primitive state
-{ cmd: "query", target: "arm-left" }
-// → { id: "arm-left", type: "cylinder", position: [...], params: {...}, deformers: [...] }
+// Get node state
+{ cmd: "query", target: "sculpt_volume" }
+// → { id: "sculpt_volume", type: "sculpt_volume", position: [...], material: {...} }
 
 // Get full scene graph
 { cmd: "query_scene" }
-// → { primitives: [...], hierarchy: {...}, animation: {...} }
+// → { nodes: [...], hierarchy: {...}, animation: {...} }
 
 // Get rendered frame info
 { cmd: "query_frame" }
@@ -176,13 +164,11 @@ Comparison uses per-pixel diff with a configurable threshold. Small differences 
 
 | Test | What It Validates |
 |------|------------------|
-| Spawn each primitive type | Correct geometry generation |
-| Apply each deformer | Vertex shader deformation works |
-| Seam smoothing on/off | Post-processing pass runs correctly |
+| Sculpt brush types | Add/subtract/smooth/move produce correct geometry |
 | Material presets | PBR pipeline, lighting |
 | Animation playback at keyframes | Interpolation, transform updates |
 | Stereo rendering | Both eyes render, no divergence |
-| 1000-primitive stress test | No visual corruption at scale |
+| Large volume stress test | No visual corruption at scale |
 
 ### Reference Image Management
 
@@ -262,9 +248,8 @@ This enables:
 
 Pure logic tests, no rendering needed. Run in Node.
 
-- Primitive creation and parameter validation
+- Scene node creation and validation
 - Parent/child hierarchy operations
-- Deformer stacking order
 - Undo/redo stack integrity
 - Animation keyframe interpolation math
 - Scene serialization roundtrip (JSON → scene → JSON = identical)
@@ -275,19 +260,16 @@ Full pipeline tests. Require browser with WebGPU.
 
 | Test | Commands | Assertion |
 |------|----------|-----------|
-| Spawn and query | `spawn` → `query` | Returned state matches input |
-| Deform pipeline | `spawn` → `add_deformer` → `screenshot` | Visual matches reference |
-| Undo after spawn | `spawn` → `undo` → `query_scene` | Scene is empty |
-| Undo after deform | `spawn` → `add_deformer` → `undo` → `screenshot` | Deformer removed visually |
-| Parent chain | `spawn A` → `spawn B` → `parent B→A` → move A → `query B` | B moved with A |
-| Animation playback | `spawn` → `keyframe` × N → `anim_play` → `seek` → `screenshot` | Correct pose at time T |
+| Sculpt and query | sculpt brush → `query` | Scene node exists with mesh data |
+| Undo after sculpt | sculpt brush → `undo` → `query_scene` | Stroke reverted |
+| Material change | `set_material` → `screenshot` | Visual matches reference |
+| Animation playback | `keyframe` x N → `anim_play` → `seek` → `screenshot` | Correct pose at time T |
 
 ### Stress / Performance
 
-- Spawn 1000 primitives, measure frame time
-- Apply 5 stacked deformers to 100 primitives
+- Sculpt large volume (many active chunks), measure frame time
 - Record 10-second performance capture, verify frame drops
-- Serialize + deserialize 500-primitive scene, measure time
+- Serialize + deserialize complex scene, measure time
 
 ### XR Input Simulation
 
@@ -295,19 +277,11 @@ Full interaction tests using emulated controllers.
 
 | Test | Emulated Actions | Assertion |
 |------|-----------------|-----------|
-| Open palette and spawn | `xr_button(B)` → `xr_pose` over sphere → `xr_button(trigger)` → `xr_pose` in space → release | Sphere exists at target position |
-| Grab and move | `xr_pose` on primitive → `grip pressed` → move → `grip released` | Primitive at new position |
-| Two-handed scale | Both grips on primitive → move apart → release | Primitive scale increased |
-| Handle deformation | `xr_pose` on handle → `grip` → drag → release | Deformer param changed |
+| Select sculpt tool | `xr_button(B)` → `xr_pose` over tool → `xr_button(trigger)` → release | Tool selected |
+| Sculpt add stroke | `xr_pose` in space → `trigger pressed` → move → `trigger released` | Material added to volume |
+| Grab and move layer | `xr_pose` on sculpt mesh → `grip pressed` → move → `grip released` | Volume at new position |
+| Two-handed scale | Both grips → move apart → release | World scale increased |
 | Undo via thumbstick | `xr_thumbstick(left, -1, 0)` | Last operation undone |
-
-### Seam Quality
-
-Specific tests for the core rendering challenge.
-
-- Two overlapping cylinders at various angles → screenshot → compare seam smoothness
-- Enable/disable seam smoothing → measure pixel difference in seam region
-- Rotate camera around a joint → capture screenshots at N angles → verify no view-dependent artifacts exceed threshold
 
 ## Recording and Replay
 
@@ -399,24 +373,21 @@ tests/
     animation-math.test.ts
     serialization.test.ts
   visual/                  # Require headless Chrome + WebGPU
-    primitives.test.ts
-    deformers.test.ts
-    seam-quality.test.ts
+    sculpt-brushes.test.ts
     materials.test.ts
     animation.test.ts
     stress.test.ts
   xr/                      # XR input emulation tests
-    palette.test.ts
+    tool-select.test.ts
+    sculpt-stroke.test.ts
     grab-move.test.ts
-    handle-deform.test.ts
     two-handed.test.ts
   recordings/              # Captured sessions for replay tests
     build-character.json
     animate-walk.json
   references/              # Golden screenshots for visual comparison
-    cylinder-default.png
-    sphere-bend-30deg.png
-    seam-smooth-on.png
+    sculpt-add-sphere.png
+    sculpt-subtract.png
     ...
   harness/
     command-bus.ts          # Command dispatch + type definitions

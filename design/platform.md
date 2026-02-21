@@ -13,28 +13,27 @@ Every creation gets a unique URL: `seam.app/s/abc123`
 
 ### Scene Format
 
+JSON scene metadata + binary SDF chunk data. Metadata is human-readable and git-diffable. SDF volumes serialized as compressed binary blobs referenced from the JSON.
+
 ```json
 {
   "version": 1,
-  "primitives": [
+  "nodes": [
     {
-      "id": "p1",
-      "type": "cylinder",
-      "transform": { "position": [0, 1, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1] },
-      "params": { "radiusTop": 0.1, "radiusBottom": 0.15, "height": 0.8 },
-      "deformers": [
-        { "type": "bend", "angle": 15, "axis": "x" }
-      ],
+      "id": "sculpt_volume",
+      "type": "sculpt_volume",
+      "transform": { "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1] },
       "material": { "color": "#cc8844", "roughness": 0.8, "metallic": 0.0 },
-      "parent": null
+      "sdfData": "chunks/sculpt_volume.bin"
     }
   ],
+  "lights": [...],
   "animation": { ... },
   "environment": "studio"
 }
 ```
 
-Tiny file sizes (KB). Loads instantly. Diffable with git. Mergeable for collaboration.
+Scene sizes depend on sculpt complexity (number of active chunks). Loads fast with streaming chunk decompression.
 
 ### Embed
 
@@ -48,7 +47,7 @@ Embeddable in any website, blog, social media.
 
 ### Interaction Layer
 
-Add behaviors to primitives:
+Add behaviors to scene objects:
 
 ```
 When [this cylinder] is [touched by hand]:
@@ -84,9 +83,9 @@ on("grab", boxTorso, (hand) => {
 
 ### Physics (Optional)
 
-- Rigid body physics on primitives (gravity, collisions)
-- Configurable per-primitive: static, dynamic, kinematic
-- Constraints: hinge, ball, spring between primitives
+- Rigid body physics on sculpt volumes (gravity, collisions)
+- Configurable per-node: static, dynamic, kinematic
+- Constraints: hinge, ball, spring between nodes
 - Library: Rapier.js (Rust compiled to WASM, excellent performance)
 
 ## Phase 3: Multiplayer
@@ -94,16 +93,16 @@ on("grab", boxTorso, (hand) => {
 ### Shared Creation Spaces
 
 - Multiple users in the same VR space
-- See each other's avatars (built from primitives!)
-- Real-time sync of primitive edits
+- See each other's avatars (sculpted in-app!)
+- Real-time sync of sculpt edits
 - Cursor/selection visibility for collaboration
 
 ### Technical Approach
 
 - WebSocket or WebRTC for real-time sync
 - CRDT-based scene state (conflict-free replicated data)
-- Each edit = operation on the primitive list (add, remove, modify parameter)
-- Operations are small (change one float) → low bandwidth
+- Each edit = operation on scene nodes (sculpt strokes, transforms, material changes)
+- Sculpt strokes can be replicated as brush operations (compact)
 - Eventual consistency: all clients converge to same state
 
 ### Social Features
@@ -119,10 +118,10 @@ on("grab", boxTorso, (hand) => {
 ### AI Creative Copilot
 
 **Content generation:**
-- "Add a tree" → spawns cylinder trunk + sphere canopy with appropriate materials
-- "Make this look like a robot" → suggests material changes, adds detail primitives
+- "Add a tree" → sculpts trunk + canopy shapes with appropriate materials
+- "Make this look like a robot" → suggests material changes, adds sculpted details
 - "Create a walk cycle" → generates keyframe animation from description
-- Voice commands in VR: "make the arms longer" → adjusts deformation params
+- Voice commands in VR: "make the arms longer" → reshapes sculpted geometry
 
 **Script generation:**
 - "When I click the door, open it" → generates touch event + rotation animation
@@ -137,6 +136,6 @@ on("grab", boxTorso, (hand) => {
 
 - LLM API calls (Claude/GPT) for natural language → scene edits
 - Scene format (JSON) is LLM-friendly (small, structured, human-readable)
-- Tool-use pattern: LLM calls functions like `addPrimitive()`, `setDeformer()`, `addKeyframe()`
+- Tool-use pattern: LLM calls functions like `sculptBrush()`, `setMaterial()`, `addKeyframe()`
 - Context: current scene state + user's intent → targeted edits
 - Local inference for latency-critical operations (voice commands in VR)

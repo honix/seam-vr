@@ -4,19 +4,18 @@
 
 ### 1. Performance Capture (Primary)
 
-Record hand movements in real-time, mapped to primitive transforms.
+Record hand movements in real-time, mapped to scene node transforms.
 
 **Flow:**
 1. Select primitives to animate (or "puppet" - a group)
-2. Grab control points (e.g., character's hands, head)
+2. Grab control points (e.g., sculpted character's hands, head)
 3. Press record
 4. Move naturally - system records transforms at 90fps
 5. Stop recording
 6. Playback immediately
 
 **What gets recorded:**
-- Transform (position, rotation, scale) per primitive per frame
-- Deformation parameter changes (if handles are grabbed during recording)
+- Transform (position, rotation, scale) per scene node per frame
 - Timeline position for synchronization
 
 **Multi-take workflow:**
@@ -32,12 +31,12 @@ Traditional timeline for precision adjustments after performance capture.
 **Timeline UI:**
 - Floating panel in VR space (grabbable, positionable)
 - Horizontal time axis with playhead
-- Rows per primitive (or per group)
+- Rows per scene node (or per group)
 - Diamond markers for keyframes
 - Grab playhead to scrub
 
 **Keyframe operations:**
-- Auto-key: moving a primitive while stopped creates a keyframe
+- Auto-key: moving a node while stopped creates a keyframe
 - Copy/paste keyframes
 - Adjust timing by dragging keyframes on timeline
 - Interpolation: linear, ease-in/out, bezier (visual curve editor, later phase)
@@ -51,14 +50,14 @@ Animation {
 }
 
 Track {
-  targetId: string (primitive or group ID)
-  property: string ("transform", "bend.angle", "color", etc.)
+  targetId: string (scene node or group ID)
+  property: string ("transform", "color", etc.)
   keyframes: Keyframe[]
 }
 
 Keyframe {
   time: number (seconds)
-  value: any (vec3 for position, float for deformer param, etc.)
+  value: any (vec3 for position, color, etc.)
   interpolation: "linear" | "ease" | "step"
 }
 ```

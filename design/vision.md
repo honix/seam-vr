@@ -35,16 +35,6 @@ All levels share the same platform and can learn from each other's work by remix
 - No app store gatekeeping
 - Updates ship instantly
 
-## Why Primitives (Not SDF/Voxels)
-
-Learned from the render-sdf project:
-- SDF → mesh extraction requires GPU compute pipelines that fight browser/engine abstractions
-- Marching cubes creates CPU→GPU bottlenecks (see render-sdf's 5 branch exploration)
-- Primitives are standard meshes - trivial to render on any GPU, including Quest/mobile
-- Non-destructive editing (change any parameter anytime) vs destructive SDF sculpting
-- Scene files are tiny (kilobytes of parameters vs megabytes of voxel data)
-- Primitives map naturally to animation (every shape has a transform to keyframe)
-
 ## Why VR-First
 
 - VR creation is inherently spatial - placing and deforming 3D shapes with your hands
@@ -55,7 +45,7 @@ Learned from the render-sdf project:
 
 ## Success Metrics (MVP)
 
-- A single user can create a recognizable character from primitives in < 5 minutes
+- A single user can sculpt a recognizable character in < 5 minutes
 - Animate it with performance capture in < 2 minutes
 - Share via URL that loads in < 3 seconds on any browser
 - VR viewer sees the animation in stereo with head tracking

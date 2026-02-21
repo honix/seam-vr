@@ -19,43 +19,30 @@
 - No mesh shaders (post-v1 WebGPU spec)
 
 **Mitigations:**
-- Primitive approach needs no compute shaders → works with WebGL fallback
 - Quest standalone can be addressed later with native app if needed
-- Primitive scenes are tiny (KB) → memory is not an issue
-- Mesh shaders irrelevant for standard primitive rendering
+- Sparse chunked SDF volumes keep memory usage reasonable
+- Mesh shaders not required for current pipeline
 
-## Why Primitives (Not SDF/Voxels)
+## Why SDF Sculpting
 
-### Lessons from render-sdf project
+### Learned from render-sdf project
 
-The render-sdf project explored 5 branches over weeks:
+The render-sdf project explored multiple rendering approaches. The core finding: GPU mesh extraction works well when using WebGPU compute shaders with sparse chunked volumes. Key decisions:
 
-| Branch | Approach | Problem |
-|--------|----------|---------|
-| `main` | MC mesh + CPU readback | 4 chunks/frame limit, 360KB/chunk readback |
-| `gpu-direct-mesh-4.6` | CompositorEffect indirect draw | Bypasses Godot renderer, manual depth/lighting/VR stereo |
-| `temporal-cache` | Raymarching + depth reprojection | Ghosting, noise, 1/4 pixel cycling artifacts |
-| `brick-map` | Sparse brick map + raymarching | Visual glitches, noise - user doesn't like the look |
-
-**Core finding:** GPU mesh generation in any engine (not just Godot) requires either:
-1. CPU readback (slow, bottleneck) or
-2. Custom renderer bypassing the engine (fragile, reimplements everything)
-
-**Primitives avoid the entire problem:**
-- Each primitive is a standard mesh (50-500 triangles)
-- Generated once when spawned, updated only when deformation params change
-- Standard vertex + fragment shader pipeline
-- No compute shaders needed for MVP
-- Runs on WebGL as fallback (Quest standalone, older browsers)
+- **32^3 cells/chunk, 2mm voxel size** - good balance of detail vs performance
+- **Sparse allocation** - only chunks with content use GPU memory
+- **Pooled GPU buffers** - avoid per-frame allocation overhead
+- **Capsule brush** - interpolates between controller positions for smooth strokes
+- **Deferred remeshing** - boundary neighbors queued for batch processing
 
 ### Tradeoffs accepted
 
-| Lost | Gained |
-|------|--------|
-| Organic SDF sculpting (Medium-style) | Non-destructive parametric editing |
-| Arbitrary topology | Instant rendering on any device |
-| Smooth boolean subtraction | Tiny scene files (KB vs MB) |
-| Voxel-level detail | Natural animation model (every shape has a transform) |
+| Gained | Cost |
+|--------|------|
+| Organic sculpting (Medium-style) | Larger scene files (voxel data vs parameters) |
+| Arbitrary topology | GPU compute dependency (WebGPU required) |
+| Smooth boolean operations | No WebGL fallback for sculpt pipeline |
+| Intuitive VR creation (hands → clay) | More complex data pipeline |
 
 ## Data Model
 
@@ -63,14 +50,11 @@ The render-sdf project explored 5 branches over weeks:
 
 ```
 Scene
-  ├── Primitive (cylinder, id: "torso")
-  │     ├── deformers: [taper, bend]
-  │     ├── material: { color, roughness, metallic }
-  │     └── children:
-  │           ├── Primitive (sphere, id: "head")
-  │           └── Primitive (cylinder, id: "arm-left")
-  │                 └── Primitive (sphere, id: "hand-left")
+  ├── SculptVolume (id: "sculpt_volume")
+  │     ├── chunks: sparse SDF data
+  │     └── material: { color, roughness, metallic }
   ├── Light (directional, id: "sun")
+  ├── Light (point, id: "light-1")
   ├── Environment (id: "studio")
   └── Animation
         └── tracks: [...]
@@ -78,14 +62,7 @@ Scene
 
 ### Serialization
 
-JSON scene format. Human-readable, LLM-friendly, git-diffable.
-
-Estimated sizes:
-- Simple character (20 primitives): ~2 KB
-- Complex scene (200 primitives + animation): ~50 KB
-- Rich interactive experience (500 primitives + scripts): ~200 KB
-
-Compare to render-sdf: 256^3 R16F SDF = 33.5 MB (167,000x larger).
+JSON scene format with binary SDF data. Scene metadata is human-readable, LLM-friendly, git-diffable. SDF chunk data stored as binary blobs referenced from the JSON.
 
 ## Framework Choice
 
@@ -101,20 +78,19 @@ Compare to render-sdf: 256^3 R16F SDF = 33.5 MB (167,000x larger).
 | Compute shaders | Experimental | Supported | Native |
 | Learning curve | Moderate | Moderate | Steep |
 
-**Recommendation:** Start with Three.js. Largest community, decent WebGPU support, built-in WebXR. If we hit limitations, can drop to raw WebGPU for specific passes (seam smoothing post-process).
+**Decision:** Three.js for scene graph, WebXR, and standard rendering. Raw WebGPU compute pipelines for sculpt pipeline (SDF brush, marching cubes).
 
 ## Performance Budget
 
-Primitive rendering is cheap. The budget goes to:
+Sculpt-focused pipeline budget:
 
 | Component | Budget | Notes |
 |-----------|--------|-------|
-| Primitive rendering | 2-3ms | 1000 primitives, standard pipeline |
-| Deformer computation | 0.5ms | Vertex shader, per-primitive |
-| Seam smoothing post-pass | 1-2ms | Screen-space, fullscreen |
-| Lighting + shadows | 2-3ms | One directional + env map |
+| Sculpt compute (per stroke) | 3-5ms | SDF brush + padded buffer + marching cubes |
+| Mesh rendering | 2-3ms | Sculpt chunks + lights |
+| Lighting + shadows | 2-3ms | Directional + point/spot + env map |
 | Post-processing (AO, bloom) | 1-2ms | Standard passes |
 | WebXR overhead | 0.5ms | Frame submission |
-| **Total** | **~8ms** | **Well within 11.1ms VR budget** |
+| **Total** | **~8-13ms** | **Within 11.1ms VR budget (sculpt amortized)** |
 
-Headroom for future features: scripting, physics, particles.
+Sculpt compute is amortized - only runs on frames with active brush input, not every frame. Headroom for future features: scripting, physics, particles.

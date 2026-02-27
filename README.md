@@ -1,7 +1,7 @@
-# Sculpting and animation web-app. Work in progress
+# Seam-VR - sculpting and animation web-app
 
 ## Status
-Early stage proof of concept.
+Work in progress. Early stage proof of concept.
 
 - [x] Voxel-based sculpting and cubemarching on GPU
 - [ ] Better UI and tools for sculpting

@@ -3,7 +3,7 @@
 ## Status
 Work in progress. Early stage proof of concept.
 
-- [x] Voxel-based sculpting and cubemarching on GPU
+- [x] SDF voxel sculpting and cubemarching on GPU
 - [ ] Better UI and tools for sculpting
 - [ ] Camera and light settings
 - [ ] Animation/puppeteering tools

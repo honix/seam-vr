@@ -100,16 +100,16 @@ export class XRControllerTracker {
     scene.add(this.gripR);
 
     // Debug: log when controllers connect/disconnect
-    this.controllerL.addEventListener('connected', (event: any) => {
+    (this.controllerL as any).addEventListener('connected', (event: any) => {
       console.log('[XR] Controller 0 connected:', event.data?.handedness, event.data?.profiles);
     });
-    this.controllerR.addEventListener('connected', (event: any) => {
+    (this.controllerR as any).addEventListener('connected', (event: any) => {
       console.log('[XR] Controller 1 connected:', event.data?.handedness, event.data?.profiles);
     });
-    this.controllerL.addEventListener('disconnected', () => {
+    (this.controllerL as any).addEventListener('disconnected', () => {
       console.log('[XR] Controller 0 disconnected');
     });
-    this.controllerR.addEventListener('disconnected', () => {
+    (this.controllerR as any).addEventListener('disconnected', () => {
       console.log('[XR] Controller 1 disconnected');
     });
   }

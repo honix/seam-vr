@@ -47,8 +47,8 @@ export class GPUCompute {
   // Brush phase
   private brushUniformBuffers: GPUBuffer[] = [];
   private sdfReadbackBuffers: GPUBuffer[] = [];
-  // Smooth phase (double-buffer: copy = read source, chunk sdf = write target)
-  private sdfCopyBuffers: GPUBuffer[] = [];
+  // Smooth phase temp output buffers. Per-chunk sdfBuffer stays as the stable source snapshot.
+  private smoothOutputBuffers: GPUBuffer[] = [];
 
   // Remesh phase
   private paddedBuffers: GPUBuffer[] = [];
@@ -181,10 +181,10 @@ export class GPUCompute {
         usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
       }));
 
-      // SDF copy buffer for smooth double-buffer pattern (read source)
-      this.sdfCopyBuffers.push(this.device.createBuffer({
+      // Smooth output buffer for seam-aware smoothing results
+      this.smoothOutputBuffers.push(this.device.createBuffer({
         size: this.sdfSize,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
       }));
 
       // Padded buffers (172KB each, GPU-only)
@@ -337,31 +337,91 @@ export class GPUCompute {
 
   /**
    * Apply Laplacian smooth to all chunks. Processes in rounds of MAX_BATCH.
-   * Double-buffer: sdfCopyBuffer (read) -> chunkSdfBuffer (write).
+   * Reads from a stable per-chunk source snapshot and writes into per-batch temp output buffers.
    */
-  async applySmoothBatch(chunks: Chunk[], brush: BrushParams): Promise<void> {
-    if (!this.device || !this.smoothPipeline || chunks.length === 0) return;
+  async applySmoothBatch(
+    items: {
+      chunk: Chunk;
+      neighbors: {
+        nxm?: Chunk;
+        nxp?: Chunk;
+        nym?: Chunk;
+        nyp?: Chunk;
+        nzm?: Chunk;
+        nzp?: Chunk;
+      };
+    }[],
+    brush: BrushParams
+  ): Promise<void> {
+    if (!this.device || !this.smoothPipeline || !this.buildPaddedPipeline ||
+        !this.emptyChunkBuffer || items.length === 0) return;
 
     const cs = this.config.chunkSize;
     const vs = this.config.voxelSize;
     const samples = cs + 1;
+    const padded = samples + 2;
     const workgroups = Math.ceil(samples / 4);
+    const bpWorkgroups = Math.ceil(padded / 4);
 
-    for (let offset = 0; offset < chunks.length; offset += MAX_BATCH) {
-      const n = Math.min(MAX_BATCH, chunks.length - offset);
+    const sourceBuffers = new Map<string, GPUBuffer>();
+    const uploadSnapshot = (chunk: Chunk | undefined): GPUBuffer | null => {
+      if (!chunk) return null;
+      const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
+      const existing = sourceBuffers.get(key);
+      if (existing) return existing;
+
+      const gpuData = this.getChunkBuffer(chunk, key);
+      this.device!.queue.writeBuffer(
+        gpuData.sdfBuffer,
+        0,
+        chunk.data.buffer,
+        chunk.data.byteOffset,
+        chunk.data.byteLength
+      );
+      gpuData.initialized = true;
+      gpuData.cpuDirty = false;
+      sourceBuffers.set(key, gpuData.sdfBuffer);
+      return gpuData.sdfBuffer;
+    };
+
+    for (const item of items) {
+      uploadSnapshot(item.chunk);
+      uploadSnapshot(item.neighbors.nxm);
+      uploadSnapshot(item.neighbors.nxp);
+      uploadSnapshot(item.neighbors.nym);
+      uploadSnapshot(item.neighbors.nyp);
+      uploadSnapshot(item.neighbors.nzm);
+      uploadSnapshot(item.neighbors.nzp);
+    }
+
+    for (let offset = 0; offset < items.length; offset += MAX_BATCH) {
+      const n = Math.min(MAX_BATCH, items.length - offset);
       const encoder = this.device.createCommandEncoder();
+      const bpBindGroups: GPUBindGroup[] = [];
+      const smoothBindGroups: GPUBindGroup[] = [];
 
       for (let i = 0; i < n; i++) {
-        const chunk = chunks[offset + i];
+        const { chunk, neighbors } = items[offset + i];
         const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
-        const gpuData = this.getChunkBuffer(chunk, key);
-
-        // Upload SDF data to chunk's GPU buffer (will be used as write target)
-        this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
-        gpuData.initialized = true;
-        gpuData.cpuDirty = false;
-        // Copy same data to sdfCopyBuffer (read source for double-buffer)
-        this.device.queue.writeBuffer(this.sdfCopyBuffers[i], 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+        const center = sourceBuffers.get(key)!;
+        const nxm = neighbors.nxm
+          ? sourceBuffers.get(`${neighbors.nxm.coord.x},${neighbors.nxm.coord.y},${neighbors.nxm.coord.z}`)!
+          : this.emptyChunkBuffer;
+        const nxp = neighbors.nxp
+          ? sourceBuffers.get(`${neighbors.nxp.coord.x},${neighbors.nxp.coord.y},${neighbors.nxp.coord.z}`)!
+          : this.emptyChunkBuffer;
+        const nym = neighbors.nym
+          ? sourceBuffers.get(`${neighbors.nym.coord.x},${neighbors.nym.coord.y},${neighbors.nym.coord.z}`)!
+          : this.emptyChunkBuffer;
+        const nyp = neighbors.nyp
+          ? sourceBuffers.get(`${neighbors.nyp.coord.x},${neighbors.nyp.coord.y},${neighbors.nyp.coord.z}`)!
+          : this.emptyChunkBuffer;
+        const nzm = neighbors.nzm
+          ? sourceBuffers.get(`${neighbors.nzm.coord.x},${neighbors.nzm.coord.y},${neighbors.nzm.coord.z}`)!
+          : this.emptyChunkBuffer;
+        const nzp = neighbors.nzp
+          ? sourceBuffers.get(`${neighbors.nzp.coord.x},${neighbors.nzp.coord.y},${neighbors.nzp.coord.z}`)!
+          : this.emptyChunkBuffer;
 
         // Pack uniform struct matching WGSL BrushUniforms layout (80 bytes)
         const uniformData = new ArrayBuffer(80);
@@ -379,23 +439,54 @@ export class GPUCompute {
 
         this.device.queue.writeBuffer(this.brushUniformBuffers[i], 0, new Uint8Array(uniformData));
 
-        const bindGroup = this.device.createBindGroup({
+        const bpUniData = new ArrayBuffer(16);
+        new Uint32Array(bpUniData, 0, 1)[0] = samples;
+        new Float32Array(bpUniData, 4, 1)[0] = this.config.emptyValue;
+        this.device.queue.writeBuffer(this.bpUniformBuffers[i], 0, new Uint8Array(bpUniData));
+
+        bpBindGroups.push(this.device.createBindGroup({
+          layout: this.buildPaddedPipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: this.bpUniformBuffers[i] } },
+            { binding: 1, resource: { buffer: center } },
+            { binding: 2, resource: { buffer: nxm } },
+            { binding: 3, resource: { buffer: nxp } },
+            { binding: 4, resource: { buffer: nym } },
+            { binding: 5, resource: { buffer: nyp } },
+            { binding: 6, resource: { buffer: nzm } },
+            { binding: 7, resource: { buffer: nzp } },
+            { binding: 8, resource: { buffer: this.paddedBuffers[i] } },
+          ],
+        }));
+
+        smoothBindGroups.push(this.device.createBindGroup({
           layout: this.smoothPipeline.getBindGroupLayout(0),
           entries: [
             { binding: 0, resource: { buffer: this.brushUniformBuffers[i] } },
-            { binding: 1, resource: { buffer: this.sdfCopyBuffers[i] } },
-            { binding: 2, resource: { buffer: gpuData.sdfBuffer } },
+            { binding: 1, resource: { buffer: this.paddedBuffers[i] } },
+            { binding: 2, resource: { buffer: this.smoothOutputBuffers[i] } },
           ],
-        });
+        }));
+      }
 
-        const pass = encoder.beginComputePass();
-        pass.setPipeline(this.smoothPipeline);
-        pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(workgroups, workgroups, workgroups);
-        pass.end();
+      const bpPass = encoder.beginComputePass();
+      bpPass.setPipeline(this.buildPaddedPipeline);
+      for (let i = 0; i < n; i++) {
+        bpPass.setBindGroup(0, bpBindGroups[i]);
+        bpPass.dispatchWorkgroups(bpWorkgroups, bpWorkgroups, bpWorkgroups);
+      }
+      bpPass.end();
 
-        // Readback smoothed result from chunkSdfBuffer
-        encoder.copyBufferToBuffer(gpuData.sdfBuffer, 0, this.sdfReadbackBuffers[i], 0, this.sdfSize);
+      const smoothPass = encoder.beginComputePass();
+      smoothPass.setPipeline(this.smoothPipeline);
+      for (let i = 0; i < n; i++) {
+        smoothPass.setBindGroup(0, smoothBindGroups[i]);
+        smoothPass.dispatchWorkgroups(workgroups, workgroups, workgroups);
+      }
+      smoothPass.end();
+
+      for (let i = 0; i < n; i++) {
+        encoder.copyBufferToBuffer(this.smoothOutputBuffers[i], 0, this.sdfReadbackBuffers[i], 0, this.sdfSize);
       }
 
       this.device.queue.submit([encoder.finish()]);
@@ -405,8 +496,10 @@ export class GPUCompute {
 
       for (let i = 0; i < n; i++) {
         const result = new Float32Array(this.sdfReadbackBuffers[i].getMappedRange());
-        chunks[offset + i].data.set(result);
+        const chunk = items[offset + i].chunk;
+        chunk.data.set(result);
         this.sdfReadbackBuffers[i].unmap();
+        this.getChunkBuffer(chunk, `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`).cpuDirty = true;
       }
     }
   }
@@ -591,7 +684,7 @@ export class GPUCompute {
     // Destroy pooled buffers
     const pools = [
       this.brushUniformBuffers, this.sdfReadbackBuffers,
-      this.sdfCopyBuffers,
+      this.smoothOutputBuffers,
       this.paddedBuffers,
       this.bpUniformBuffers, this.mcUniformBuffers,
       this.vertexBuffers, this.counterBuffers,

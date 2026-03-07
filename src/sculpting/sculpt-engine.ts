@@ -194,7 +194,7 @@ export class SculptEngine {
       const modifiedChunks: Chunk[] = [...coords.values()].map(c => this.volume.getOrCreateChunk(c));
 
       const t1 = performance.now();
-      await this.gpu.applySmoothBatch(modifiedChunks, brush);
+      await this.gpu.applySmoothBatch(this.createChunkNeighborhoodItems(modifiedChunks), brush);
       const t2 = performance.now();
 
       for (const chunk of modifiedChunks) {
@@ -245,17 +245,7 @@ export class SculptEngine {
    */
   private async remeshChunks(chunks: Chunk[]): Promise<void> {
     if (chunks.length === 0) return;
-    const items = chunks.map(chunk => ({
-      chunk,
-      neighbors: {
-        nxm: this.volume.getChunk({ x: chunk.coord.x - 1, y: chunk.coord.y, z: chunk.coord.z }),
-        nxp: this.volume.getChunk({ x: chunk.coord.x + 1, y: chunk.coord.y, z: chunk.coord.z }),
-        nym: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y - 1, z: chunk.coord.z }),
-        nyp: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y + 1, z: chunk.coord.z }),
-        nzm: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y, z: chunk.coord.z - 1 }),
-        nzp: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y, z: chunk.coord.z + 1 }),
-      },
-    }));
+    const items = this.createChunkNeighborhoodItems(chunks);
 
     // Batch GPU: single submission, single fence
     const meshResults = await this.gpu.buildPaddedAndExtractBatch(items);
@@ -267,6 +257,20 @@ export class SculptEngine {
       chunk.empty = meshData.vertexCount === 0;
       chunk.dirty = false;
     }
+  }
+
+  private createChunkNeighborhoodItems(chunks: Chunk[]) {
+    return chunks.map(chunk => ({
+      chunk,
+      neighbors: {
+        nxm: this.volume.getChunk({ x: chunk.coord.x - 1, y: chunk.coord.y, z: chunk.coord.z }),
+        nxp: this.volume.getChunk({ x: chunk.coord.x + 1, y: chunk.coord.y, z: chunk.coord.z }),
+        nym: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y - 1, z: chunk.coord.z }),
+        nyp: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y + 1, z: chunk.coord.z }),
+        nzm: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y, z: chunk.coord.z - 1 }),
+        nzp: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y, z: chunk.coord.z + 1 }),
+      },
+    }));
   }
 
   /**

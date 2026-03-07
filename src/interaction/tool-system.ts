@@ -5,7 +5,6 @@ export type ToolId =
   | 'sculpt_add'
   | 'sculpt_subtract'
   | 'sculpt_smooth'
-  | 'sculpt_move'
   | 'spawn_cube'
   | 'spawn_sphere'
   | 'spawn_capsule'
@@ -28,7 +27,6 @@ export const TOOL_REGISTRY: ToolDefinition[] = [
   { id: 'sculpt_add',       label: 'Add',        color: 0x44cc44, category: 'sculpt' },
   { id: 'sculpt_subtract',  label: 'Subtract',   color: 0xcc4444, category: 'sculpt' },
   { id: 'sculpt_smooth',    label: 'Smooth',     color: 0x9944cc, category: 'sculpt' },
-  { id: 'sculpt_move',      label: 'Move',       color: 0x44cccc, category: 'sculpt' },
   { id: 'spawn_cube',       label: 'Cube',       color: 0xcccc44, category: 'spawn' },
   { id: 'spawn_sphere',     label: 'Sphere',     color: 0xcccc44, category: 'spawn' },
   { id: 'spawn_capsule',    label: 'Capsule',    color: 0xcccc44, category: 'spawn' },

@@ -14,6 +14,7 @@ import buildPaddedShader from '../shaders/build-padded.compute.wgsl?raw';
 
 interface ChunkGPUData {
   sdfBuffer: GPUBuffer;
+  initialized: boolean;
 }
 
 // Max chunks per GPU round (pool slots). Overflow handled by multi-round.
@@ -36,6 +37,7 @@ export class GPUCompute {
   // Shared resources
   private edgeTableBuffer: GPUBuffer | null = null;
   private triTableBuffer: GPUBuffer | null = null;
+  private emptyChunkBuffer: GPUBuffer | null = null;
 
   // Per-chunk GPU buffers (persist across frames)
   private chunkBuffers: Map<string, ChunkGPUData> = new Map();
@@ -48,7 +50,6 @@ export class GPUCompute {
   private sdfCopyBuffers: GPUBuffer[] = [];
 
   // Remesh phase
-  private sliceBuffers: GPUBuffer[] = [];
   private paddedBuffers: GPUBuffer[] = [];
   private bpUniformBuffers: GPUBuffer[] = [];
   private mcUniformBuffers: GPUBuffer[] = [];
@@ -59,7 +60,6 @@ export class GPUCompute {
 
   // Sizes cached from config
   private sdfSize = 0;
-  private sliceSize = 0;
   private paddedSize = 0;
   private vertexBufferSize = 0;
 
@@ -158,9 +158,14 @@ export class GPUCompute {
     const padded = samples + 2;
 
     this.sdfSize = samples * samples * samples * 4;
-    this.sliceSize = 6 * samples * samples * 4;
     this.paddedSize = padded * padded * padded * 4;
     this.vertexBufferSize = MAX_VERTICES_PER_CHUNK * 6 * 4;
+
+    this.emptyChunkBuffer = this.device.createBuffer({
+      size: this.sdfSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(this.emptyChunkBuffer, 0, new Float32Array(samples * samples * samples).fill(this.config.emptyValue));
 
     for (let i = 0; i < MAX_BATCH; i++) {
       // Brush uniforms (80 bytes — expanded for capsule brush)
@@ -178,12 +183,6 @@ export class GPUCompute {
       // SDF copy buffer for smooth double-buffer pattern (read source)
       this.sdfCopyBuffers.push(this.device.createBuffer({
         size: this.sdfSize,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      }));
-
-      // Slice buffers (26KB each)
-      this.sliceBuffers.push(this.device.createBuffer({
-        size: this.sliceSize,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       }));
 
@@ -238,8 +237,23 @@ export class GPUCompute {
         size: chunk.data.byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
       });
-      gpuData = { sdfBuffer: buffer };
+      gpuData = { sdfBuffer: buffer, initialized: false };
       this.chunkBuffers.set(key, gpuData);
+    }
+    return gpuData;
+  }
+
+  private ensureChunkUploaded(chunk: Chunk, key: string): ChunkGPUData {
+    const gpuData = this.getChunkBuffer(chunk, key);
+    if (!gpuData.initialized) {
+      this.device!.queue.writeBuffer(
+        gpuData.sdfBuffer,
+        0,
+        chunk.data.buffer,
+        chunk.data.byteOffset,
+        chunk.data.byteLength
+      );
+      gpuData.initialized = true;
     }
     return gpuData;
   }
@@ -265,6 +279,7 @@ export class GPUCompute {
         const gpuData = this.getChunkBuffer(chunk, key);
 
         this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+        gpuData.initialized = true;
 
         // Pack uniform struct matching WGSL BrushUniforms layout (80 bytes):
         //  0: center (vec3<f32>) + radius (f32)        = 16 bytes
@@ -340,6 +355,7 @@ export class GPUCompute {
 
         // Upload SDF data to chunk's GPU buffer (will be used as write target)
         this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+        gpuData.initialized = true;
         // Copy same data to sdfCopyBuffer (read source for double-buffer)
         this.device.queue.writeBuffer(this.sdfCopyBuffers[i], 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
 
@@ -396,10 +412,20 @@ export class GPUCompute {
    * Each round: single GPU submission + single fence.
    */
   async buildPaddedAndExtractBatch(
-    items: { chunk: Chunk; boundarySlices: Float32Array }[]
+    items: {
+      chunk: Chunk;
+      neighbors: {
+        nxm?: Chunk;
+        nxp?: Chunk;
+        nym?: Chunk;
+        nyp?: Chunk;
+        nzm?: Chunk;
+        nzp?: Chunk;
+      };
+    }[]
   ): Promise<MeshData[]> {
     if (!this.device || !this.buildPaddedPipeline || !this.mcPipeline ||
-        !this.edgeTableBuffer || !this.triTableBuffer || items.length === 0) {
+        !this.edgeTableBuffer || !this.triTableBuffer || !this.emptyChunkBuffer || items.length === 0) {
       return items.map(() => ({ positions: new Float32Array(0), normals: new Float32Array(0), vertexCount: 0 }));
     }
 
@@ -417,12 +443,28 @@ export class GPUCompute {
       const encoder = this.device.createCommandEncoder();
 
       for (let i = 0; i < n; i++) {
-        const { chunk, boundarySlices } = items[offset + i];
+        const { chunk, neighbors } = items[offset + i];
         const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
-        const gpuData = this.getChunkBuffer(chunk, key);
+        const gpuData = this.ensureChunkUploaded(chunk, key);
 
-        this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
-        this.device.queue.writeBuffer(this.sliceBuffers[i], 0, boundarySlices.buffer, boundarySlices.byteOffset, boundarySlices.byteLength);
+        const nxm = neighbors.nxm
+          ? this.ensureChunkUploaded(neighbors.nxm, `${neighbors.nxm.coord.x},${neighbors.nxm.coord.y},${neighbors.nxm.coord.z}`).sdfBuffer
+          : this.emptyChunkBuffer;
+        const nxp = neighbors.nxp
+          ? this.ensureChunkUploaded(neighbors.nxp, `${neighbors.nxp.coord.x},${neighbors.nxp.coord.y},${neighbors.nxp.coord.z}`).sdfBuffer
+          : this.emptyChunkBuffer;
+        const nym = neighbors.nym
+          ? this.ensureChunkUploaded(neighbors.nym, `${neighbors.nym.coord.x},${neighbors.nym.coord.y},${neighbors.nym.coord.z}`).sdfBuffer
+          : this.emptyChunkBuffer;
+        const nyp = neighbors.nyp
+          ? this.ensureChunkUploaded(neighbors.nyp, `${neighbors.nyp.coord.x},${neighbors.nyp.coord.y},${neighbors.nyp.coord.z}`).sdfBuffer
+          : this.emptyChunkBuffer;
+        const nzm = neighbors.nzm
+          ? this.ensureChunkUploaded(neighbors.nzm, `${neighbors.nzm.coord.x},${neighbors.nzm.coord.y},${neighbors.nzm.coord.z}`).sdfBuffer
+          : this.emptyChunkBuffer;
+        const nzp = neighbors.nzp
+          ? this.ensureChunkUploaded(neighbors.nzp, `${neighbors.nzp.coord.x},${neighbors.nzp.coord.y},${neighbors.nzp.coord.z}`).sdfBuffer
+          : this.emptyChunkBuffer;
 
         // BuildPadded uniforms
         const bpUniData = new ArrayBuffer(16);
@@ -435,8 +477,13 @@ export class GPUCompute {
           entries: [
             { binding: 0, resource: { buffer: this.bpUniformBuffers[i] } },
             { binding: 1, resource: { buffer: gpuData.sdfBuffer } },
-            { binding: 2, resource: { buffer: this.sliceBuffers[i] } },
-            { binding: 3, resource: { buffer: this.paddedBuffers[i] } },
+            { binding: 2, resource: { buffer: nxm } },
+            { binding: 3, resource: { buffer: nxp } },
+            { binding: 4, resource: { buffer: nym } },
+            { binding: 5, resource: { buffer: nyp } },
+            { binding: 6, resource: { buffer: nzm } },
+            { binding: 7, resource: { buffer: nzp } },
+            { binding: 8, resource: { buffer: this.paddedBuffers[i] } },
           ],
         });
 
@@ -534,7 +581,7 @@ export class GPUCompute {
     const pools = [
       this.brushUniformBuffers, this.sdfReadbackBuffers,
       this.sdfCopyBuffers,
-      this.sliceBuffers, this.paddedBuffers,
+      this.paddedBuffers,
       this.bpUniformBuffers, this.mcUniformBuffers,
       this.vertexBuffers, this.counterBuffers,
       this.vertexReadbackBuffers, this.counterReadbackBuffers,
@@ -546,6 +593,7 @@ export class GPUCompute {
 
     this.edgeTableBuffer?.destroy();
     this.triTableBuffer?.destroy();
+    this.emptyChunkBuffer?.destroy();
     this.device?.destroy();
     this._ready = false;
   }

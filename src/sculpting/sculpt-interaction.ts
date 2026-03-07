@@ -10,7 +10,6 @@ type Hand = 'left' | 'right';
 
 interface HandSculptState {
   isSculpting: boolean;
-  isMoving: boolean;
   brushType: BrushType;
 }
 
@@ -18,7 +17,6 @@ const TOOL_TO_BRUSH: Partial<Record<ToolId, BrushType>> = {
   sculpt_add: 'add',
   sculpt_subtract: 'subtract',
   sculpt_smooth: 'smooth',
-  sculpt_move: 'move',
 };
 
 export class SculptInteraction {
@@ -27,8 +25,8 @@ export class SculptInteraction {
 
   constructor(engine: SculptEngine) {
     this.engine = engine;
-    this.handState.set('left', { isSculpting: false, isMoving: false, brushType: 'add' });
-    this.handState.set('right', { isSculpting: false, isMoving: false, brushType: 'add' });
+    this.handState.set('left', { isSculpting: false, brushType: 'add' });
+    this.handState.set('right', { isSculpting: false, brushType: 'add' });
   }
 
   /**
@@ -41,12 +39,7 @@ export class SculptInteraction {
     const state = this.handState.get(hand)!;
     state.brushType = brushType;
 
-    if (brushType === 'move') {
-      if (!state.isMoving) {
-        state.isMoving = true;
-        this.engine.beginMove(position);
-      }
-    } else if (brushType === 'smooth') {
+    if (brushType === 'smooth') {
       state.isSculpting = true;
       state.brushType = brushType;
       this.engine.brushStrength = strength;
@@ -65,9 +58,7 @@ export class SculptInteraction {
   updateStroke(hand: Hand, position: [number, number, number], strength: number, brushRadius: number): void {
     const state = this.handState.get(hand)!;
 
-    if (state.isMoving) {
-      this.engine.updateMove(position);
-    } else if (state.isSculpting) {
+    if (state.isSculpting) {
       this.engine.brushStrength = strength;
       this.engine.brushRadius = brushRadius;
       if (state.brushType === 'smooth') {
@@ -85,10 +76,7 @@ export class SculptInteraction {
   endStroke(hand: Hand): void {
     const state = this.handState.get(hand)!;
 
-    if (state.isMoving) {
-      state.isMoving = false;
-      this.engine.endMove();
-    } else if (state.isSculpting) {
+    if (state.isSculpting) {
       state.isSculpting = false;
       this.engine.endStroke(hand);
       this.engine.flushPendingRemesh();

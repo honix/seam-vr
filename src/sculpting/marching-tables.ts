@@ -300,15 +300,3 @@ export const EDGE_VERTICES: readonly [number, number][] = [
   [4, 5], [5, 6], [6, 7], [7, 4], // top face
   [0, 4], [1, 5], [2, 6], [3, 7], // vertical edges
 ];
-
-// Cube vertex offsets: index -> [dx, dy, dz]
-export const CUBE_VERTICES: readonly [number, number, number][] = [
-  [0, 0, 0], // 0
-  [1, 0, 0], // 1
-  [1, 1, 0], // 2
-  [0, 1, 0], // 3
-  [0, 0, 1], // 4
-  [1, 0, 1], // 5
-  [1, 1, 1], // 6
-  [0, 1, 1], // 7
-];

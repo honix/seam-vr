@@ -426,7 +426,7 @@ export class GPUCompute {
   ): Promise<MeshData[]> {
     if (!this.device || !this.buildPaddedPipeline || !this.mcPipeline ||
         !this.edgeTableBuffer || !this.triTableBuffer || !this.emptyChunkBuffer || items.length === 0) {
-      return items.map(() => ({ positions: new Float32Array(0), normals: new Float32Array(0), vertexCount: 0 }));
+      return items.map(() => ({ vertexCount: 0 }));
     }
 
     const cs = this.config.chunkSize;
@@ -546,7 +546,7 @@ export class GPUCompute {
 
         if (vc === 0) {
           this.vertexReadbackBuffers[i].unmap();
-          results.push({ positions: new Float32Array(0), normals: new Float32Array(0), vertexCount: 0 });
+          results.push({ vertexCount: 0 });
           continue;
         }
 
@@ -556,7 +556,7 @@ export class GPUCompute {
         const interleaved = new Float32Array(vc * 6);
         interleaved.set(new Float32Array(fullRange, 0, vc * 6));
         this.vertexReadbackBuffers[i].unmap();
-        results.push({ positions: new Float32Array(0), normals: new Float32Array(0), interleaved, vertexCount: vc });
+        results.push({ interleaved, vertexCount: vc });
       }
     }
 

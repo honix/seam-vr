@@ -19,13 +19,4 @@ export class Chunk {
     this.data.fill(config.emptyValue);
   }
 
-  /** Get SDF value at local sample index [ix, iy, iz] */
-  get(ix: number, iy: number, iz: number): number {
-    return this.data[iz * this.samples * this.samples + iy * this.samples + ix];
-  }
-
-  /** Set SDF value at local sample index */
-  set(ix: number, iy: number, iz: number, value: number): void {
-    this.data[iz * this.samples * this.samples + iy * this.samples + ix] = value;
-  }
 }

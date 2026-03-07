@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Seam VR",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev -- --mode vscode-debug",
+      "cwd": "${workspaceFolder}",
+      "serverReadyAction": {
+        "action": "debugWithChrome",
+        "pattern": "Local:\\s+(https?://.+)",
+        "uriFormat": "%s"
+      }
+    },
+    {
+      "name": "Attach Chrome to Vite",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:3000",
+      "webRoot": "${workspaceFolder}"
+    }
+  ]
+}

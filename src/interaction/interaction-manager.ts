@@ -27,8 +27,8 @@ function triggerStrength(value: number): number {
 
 // Callbacks for UI tool actions
 export interface UICallbacks {
-  toggleInspector?: (position: Vec3) => void;
-  toggleHierarchy?: (position: Vec3) => void;
+  toggleInspector?: (position: Vec3, direction: Vec3) => void;
+  toggleHierarchy?: (position: Vec3, direction: Vec3) => void;
 }
 
 // Per-hand state when trigger is interacting with a panel
@@ -282,9 +282,9 @@ export class InteractionManager {
           // No panel hit — raycast into scene for selection
           this.selectionManager?.raySelect(action.position, action.direction);
         } else if (tool === 'inspector') {
-          this.uiCallbacks.toggleInspector?.(action.position);
+          this.uiCallbacks.toggleInspector?.(action.position, action.direction);
         } else if (tool === 'hierarchy') {
-          this.uiCallbacks.toggleHierarchy?.(action.position);
+          this.uiCallbacks.toggleHierarchy?.(action.position, action.direction);
         }
         break;
       }

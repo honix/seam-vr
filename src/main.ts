@@ -212,8 +212,8 @@ async function init() {
   interactionManager.setSelectionManager(selectionManager);
   interactionManager.setPanels(uiManager.getPanels());
   interactionManager.setUICallbacks({
-    toggleInspector: (pos) => uiManager.toggleInspector(pos),
-    toggleHierarchy: (pos) => uiManager.toggleHierarchy(pos),
+    toggleInspector: (pos, dir) => uiManager.toggleInspector(pos, dir),
+    toggleHierarchy: (pos, dir) => uiManager.toggleHierarchy(pos, dir),
   });
 
   // --- Interaction Manager (VR) ---
@@ -232,8 +232,8 @@ async function init() {
   interactionManagerVR.setSelectionManager(selectionManager);
   interactionManagerVR.setPanels(uiManager.getPanels());
   interactionManagerVR.setUICallbacks({
-    toggleInspector: (pos) => uiManager.toggleInspector(pos),
-    toggleHierarchy: (pos) => uiManager.toggleHierarchy(pos),
+    toggleInspector: (pos, dir) => uiManager.toggleInspector(pos, dir),
+    toggleHierarchy: (pos, dir) => uiManager.toggleHierarchy(pos, dir),
   });
 
   // --- Test Harness ---

@@ -5,7 +5,6 @@
 import * as THREE from 'three';
 import { SDFVolume } from './sdf-volume';
 import { Chunk } from './chunk';
-import { MoveBrush } from './brush';
 import { GPUCompute } from './gpu-compute';
 import type { BrushParams, BrushType, SculptConfig, MeshData, ChunkCoord } from './types';
 import { DEFAULT_SCULPT_CONFIG, chunkKey } from './types';
@@ -27,7 +26,6 @@ export class SculptEngine {
   readonly sculptMaterial: THREE.MeshStandardMaterial;
 
   // Brush state
-  private moveBrush: MoveBrush = new MoveBrush();
   private _brushType: BrushType = 'add';
   private _brushRadius: number = 0.02; // 2cm default
   private _brushStrength: number = 1.0;
@@ -37,11 +35,6 @@ export class SculptEngine {
 
   // Concurrent stroke guard — drop frames while GPU is busy
   private strokeInFlight = false;
-
-  // Deferred remesh: boundary neighbors queued for later processing.
-  // Modified chunks are remeshed immediately; neighbors only affect seam normals
-  // and can be deferred to next frame or trigger release.
-  private pendingRemesh: Map<string, Chunk> = new Map();
 
   // Sculpt group in scene
   sculptGroup: THREE.Group;
@@ -100,7 +93,6 @@ export class SculptEngine {
    * Boundary neighbors are deferred to avoid 20-30 chunk remesh spikes.
    */
   async stroke(worldPos: [number, number, number], hand: string = 'right'): Promise<void> {
-    if (this._brushType === 'move') return;
     if (!this.gpu.ready) return;
     // Drop frame if previous stroke still running on GPU
     if (this.strokeInFlight) return;
@@ -141,19 +133,12 @@ export class SculptEngine {
 
       for (const chunk of modifiedChunks) {
         chunk.dirty = true;
-        chunk.updateEmpty();
       }
 
-      const extraChunks = this.volume.syncBoundaries(modifiedChunks);
       const t3 = performance.now();
 
       // Immediate: remesh only brush-modified chunks (4-8, fits in 1 GPU round)
       await this.remeshChunks(modifiedChunks);
-
-      // Defer: queue boundary neighbors (they only affect seam normals)
-      for (const c of extraChunks) {
-        this.pendingRemesh.set(chunkKey(c.coord), c);
-      }
 
       const t4 = performance.now();
 
@@ -162,8 +147,7 @@ export class SculptEngine {
         console.log(
           `[Stroke] ${total.toFixed(1)}ms total | ` +
           `brush: ${(t2 - t1).toFixed(1)}ms (${modifiedChunks.length} chunks) | ` +
-          `remesh: ${(t4 - t3).toFixed(1)}ms (${modifiedChunks.length} imm) | ` +
-          `deferred: ${this.pendingRemesh.size} pending`
+          `remesh: ${(t4 - t3).toFixed(1)}ms (${modifiedChunks.length} chunks)`
         );
       }
     } finally {
@@ -216,19 +200,12 @@ export class SculptEngine {
 
       for (const chunk of modifiedChunks) {
         chunk.dirty = true;
-        chunk.updateEmpty();
       }
 
-      const extraChunks = this.volume.syncBoundaries(modifiedChunks);
       const t3 = performance.now();
 
-      // Immediate: remesh only brush-modified chunks
+      // Immediate: remesh brush-modified chunks
       await this.remeshChunks(modifiedChunks);
-
-      // Defer: queue boundary neighbors
-      for (const c of extraChunks) {
-        this.pendingRemesh.set(chunkKey(c.coord), c);
-      }
 
       const t4 = performance.now();
 
@@ -237,8 +214,7 @@ export class SculptEngine {
         console.log(
           `[Smooth] ${total.toFixed(1)}ms total | ` +
           `smooth: ${(t2 - t1).toFixed(1)}ms (${modifiedChunks.length} chunks) | ` +
-          `remesh: ${(t4 - t3).toFixed(1)}ms (${modifiedChunks.length} imm) | ` +
-          `deferred: ${this.pendingRemesh.size} pending`
+          `remesh: ${(t4 - t3).toFixed(1)}ms (${modifiedChunks.length} chunks)`
         );
       }
     } finally {
@@ -253,55 +229,8 @@ export class SculptEngine {
     this._prevStrokePos.set(hand, null);
   }
 
-  /**
-   * Flush all pending boundary neighbor remeshes.
-   * Called when trigger is released (end of sculpt stroke).
-   * Latency is acceptable here since user isn't actively painting.
-   */
   async flushPendingRemesh(): Promise<void> {
-    if (this.pendingRemesh.size === 0) return;
-    if (!this.gpu.ready || this.strokeInFlight) return;
-
-    this.strokeInFlight = true;
-    try {
-      const chunks = [...this.pendingRemesh.values()];
-      this.pendingRemesh.clear();
-      const t0 = performance.now();
-      await this.remeshChunks(chunks);
-      const t1 = performance.now();
-      if (t1 - t0 > 2) {
-        console.log(`[Flush] ${(t1 - t0).toFixed(1)}ms (${chunks.length} deferred chunks)`);
-      }
-    } finally {
-      this.strokeInFlight = false;
-    }
-  }
-
-  /**
-   * Begin a move operation at the given position
-   */
-  beginMove(worldPos: [number, number, number]): void {
-    this.moveBrush.beginMove(this.volume, worldPos, this._brushRadius);
-    const dirtyChunks = this.volume.dirtyChunks();
-    const extraChunks = this.volume.syncBoundaries(dirtyChunks);
-    this.remeshChunks([...dirtyChunks, ...extraChunks]);
-  }
-
-  /**
-   * Update move operation with new controller position
-   */
-  async updateMove(worldPos: [number, number, number]): Promise<void> {
-    if (!this.moveBrush.isActive) return;
-    const modified = this.moveBrush.updateMove(this.volume, worldPos);
-    const extraChunks = this.volume.syncBoundaries(modified);
-    await this.remeshChunks([...modified, ...extraChunks]);
-  }
-
-  /**
-   * End move operation
-   */
-  endMove(): void {
-    this.moveBrush.endMove();
+    // No-op: boundary remesh queue removed in GPU-only sculpt path.
   }
 
   /**
@@ -309,93 +238,32 @@ export class SculptEngine {
    * All buildPadded + marchingCubes dispatches in one submission.
    */
   private async remeshChunks(chunks: Chunk[]): Promise<void> {
-    const nonEmpty: Chunk[] = [];
-    for (const chunk of chunks) {
-      if (chunk.empty) {
-        this.removeChunkMesh(chunkKey(chunk.coord));
-      } else {
-        nonEmpty.push(chunk);
-      }
-    }
-
-    if (nonEmpty.length === 0) return;
-
-    // Prepare all boundary slices (lightweight CPU reads)
-    const items = nonEmpty.map(chunk => ({
+    if (chunks.length === 0) return;
+    const items = chunks.map(chunk => ({
       chunk,
-      boundarySlices: this.extractBoundarySlices(chunk.coord),
+      neighbors: {
+        nxm: this.volume.getChunk({ x: chunk.coord.x - 1, y: chunk.coord.y, z: chunk.coord.z }),
+        nxp: this.volume.getChunk({ x: chunk.coord.x + 1, y: chunk.coord.y, z: chunk.coord.z }),
+        nym: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y - 1, z: chunk.coord.z }),
+        nyp: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y + 1, z: chunk.coord.z }),
+        nzm: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y, z: chunk.coord.z - 1 }),
+        nzp: this.volume.getChunk({ x: chunk.coord.x, y: chunk.coord.y, z: chunk.coord.z + 1 }),
+      },
     }));
 
     // Batch GPU: single submission, single fence
     const meshResults = await this.gpu.buildPaddedAndExtractBatch(items);
 
-    for (let i = 0; i < nonEmpty.length; i++) {
-      this.updateChunkMesh(chunkKey(nonEmpty[i].coord), meshResults[i]);
-      nonEmpty[i].dirty = false;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const meshData = meshResults[i];
+      this.updateChunkMesh(chunkKey(chunk.coord), meshData);
+      chunk.empty = meshData.vertexCount === 0;
+      chunk.dirty = false;
+      if (meshData.vertexCount === 0) {
+        this.removeChunkMesh(chunkKey(chunk.coord));
+      }
     }
-  }
-
-  /**
-   * Extract 6 neighbor boundary slices for a chunk, packed into a single Float32Array.
-   * Each face is samples^2 floats. Total: 6 * samples^2 floats (~26KB at chunkSize=32).
-   * Missing neighbors are filled with emptyValue.
-   */
-  private extractBoundarySlices(coord: ChunkCoord): Float32Array {
-    const cs = this.config.chunkSize;
-    const samples = cs + 1;
-    const S2 = samples * samples;
-    const slices = new Float32Array(6 * S2);
-    slices.fill(this.config.emptyValue);
-
-    // -X face: neighbor at (x-1), take its ix=cs-1
-    const nxm = this.volume.getChunk({ x: coord.x - 1, y: coord.y, z: coord.z });
-    if (nxm) {
-      for (let iz = 0; iz < samples; iz++)
-        for (let iy = 0; iy < samples; iy++)
-          slices[0 * S2 + iz * samples + iy] = nxm.get(cs - 1, iy, iz);
-    }
-
-    // +X face: neighbor at (x+1), take its ix=1
-    const nxp = this.volume.getChunk({ x: coord.x + 1, y: coord.y, z: coord.z });
-    if (nxp) {
-      for (let iz = 0; iz < samples; iz++)
-        for (let iy = 0; iy < samples; iy++)
-          slices[1 * S2 + iz * samples + iy] = nxp.get(1, iy, iz);
-    }
-
-    // -Y face: neighbor at (y-1), take its iy=cs-1
-    const nym = this.volume.getChunk({ x: coord.x, y: coord.y - 1, z: coord.z });
-    if (nym) {
-      for (let iz = 0; iz < samples; iz++)
-        for (let ix = 0; ix < samples; ix++)
-          slices[2 * S2 + iz * samples + ix] = nym.get(ix, cs - 1, iz);
-    }
-
-    // +Y face: neighbor at (y+1), take its iy=1
-    const nyp = this.volume.getChunk({ x: coord.x, y: coord.y + 1, z: coord.z });
-    if (nyp) {
-      for (let iz = 0; iz < samples; iz++)
-        for (let ix = 0; ix < samples; ix++)
-          slices[3 * S2 + iz * samples + ix] = nyp.get(ix, 1, iz);
-    }
-
-    // -Z face: neighbor at (z-1), take its iz=cs-1
-    const nzm = this.volume.getChunk({ x: coord.x, y: coord.y, z: coord.z - 1 });
-    if (nzm) {
-      for (let iy = 0; iy < samples; iy++)
-        for (let ix = 0; ix < samples; ix++)
-          slices[4 * S2 + iy * samples + ix] = nzm.get(ix, iy, cs - 1);
-    }
-
-    // +Z face: neighbor at (z+1), take its iz=1
-    const nzp = this.volume.getChunk({ x: coord.x, y: coord.y, z: coord.z + 1 });
-    if (nzp) {
-      for (let iy = 0; iy < samples; iy++)
-        for (let ix = 0; ix < samples; ix++)
-          slices[5 * S2 + iy * samples + ix] = nzp.get(ix, iy, 1);
-    }
-
-    return slices;
   }
 
   /**

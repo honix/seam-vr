@@ -1,6 +1,6 @@
 // SDF Smooth Compute Shader
 // Laplacian smoothing of SDF values within brush influence.
-// Double-buffer pattern: reads from sdf_in, writes to sdf_out to avoid race conditions.
+// Reads from a padded center+neighbor snapshot and writes one output chunk.
 // Each thread processes one voxel sample.
 
 struct BrushUniforms {
@@ -21,7 +21,7 @@ struct BrushUniforms {
 }
 
 @group(0) @binding(0) var<uniform> brush: BrushUniforms;
-@group(0) @binding(1) var<storage, read> sdf_in: array<f32>;
+@group(0) @binding(1) var<storage, read> padded_sdf: array<f32>;
 @group(0) @binding(2) var<storage, read_write> sdf_out: array<f32>;
 
 @compute @workgroup_size(4, 4, 4)
@@ -38,6 +38,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
   // Flat index into SDF buffer
   let idx = iz * s * s + iy * s + ix;
+  let p = s + 2u;
+  let px = ix + 1u;
+  let py = iy + 1u;
+  let pz = iz + 1u;
+  let padded_idx = pz * p * p + py * p + px;
 
   // World position of this sample
   let world_pos = brush.chunk_origin + vec3<f32>(
@@ -56,7 +61,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
   // Early exit: outside brush influence — pass through unchanged
   if (dist > influence_radius) {
-    sdf_out[idx] = sdf_in[idx];
+    sdf_out[idx] = padded_sdf[padded_idx];
     return;
   }
 
@@ -64,20 +69,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let weight = smoothstep(influence_radius, brush.radius * 0.5, dist);
 
   // Read current value
-  let current = sdf_in[idx];
+  let current = padded_sdf[padded_idx];
 
-  // Read 6 neighbors with boundary clamping
-  let idx_xm = iz * s * s + iy * s + select(ix - 1u, 0u, ix == 0u);
-  let idx_xp = iz * s * s + iy * s + select(ix + 1u, s - 1u, ix >= s - 1u);
-  let idx_ym = iz * s * s + select(iy - 1u, 0u, iy == 0u) * s + ix;
-  let idx_yp = iz * s * s + select(iy + 1u, s - 1u, iy >= s - 1u) * s + ix;
-  let idx_zm = select(iz - 1u, 0u, iz == 0u) * s * s + iy * s + ix;
-  let idx_zp = select(iz + 1u, s - 1u, iz >= s - 1u) * s * s + iy * s + ix;
+  // Read 6 direct neighbors from the padded source so chunk faces can see their face neighbors.
+  let idx_xm = pz * p * p + py * p + (px - 1u);
+  let idx_xp = pz * p * p + py * p + (px + 1u);
+  let idx_ym = pz * p * p + (py - 1u) * p + px;
+  let idx_yp = pz * p * p + (py + 1u) * p + px;
+  let idx_zm = (pz - 1u) * p * p + py * p + px;
+  let idx_zp = (pz + 1u) * p * p + py * p + px;
 
   let neighbor_avg = (
-    sdf_in[idx_xm] + sdf_in[idx_xp] +
-    sdf_in[idx_ym] + sdf_in[idx_yp] +
-    sdf_in[idx_zm] + sdf_in[idx_zp]
+    padded_sdf[idx_xm] + padded_sdf[idx_xp] +
+    padded_sdf[idx_ym] + padded_sdf[idx_yp] +
+    padded_sdf[idx_zm] + padded_sdf[idx_zp]
   ) / 6.0;
 
   // Blend toward neighbor average, weighted by distance falloff and strength

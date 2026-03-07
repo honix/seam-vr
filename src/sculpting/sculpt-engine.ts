@@ -89,8 +89,7 @@ export class SculptEngine {
 
   /**
    * Apply a sculpt stroke at the given world position.
-   * Only remeshes brush-modified chunks immediately (4-8 chunks, 1 GPU round).
-   * Boundary neighbors are deferred to avoid 20-30 chunk remesh spikes.
+   * Remeshes brush-modified chunks immediately (4-8 chunks, 1 GPU round).
    */
   async stroke(worldPos: [number, number, number], hand: string = 'right'): Promise<void> {
     if (!this.gpu.ready) return;
@@ -229,10 +228,6 @@ export class SculptEngine {
     this._prevStrokePos.set(hand, null);
   }
 
-  async flushPendingRemesh(): Promise<void> {
-    // No-op: boundary remesh queue removed in GPU-only sculpt path.
-  }
-
   /**
    * Remesh chunks in a single batched GPU call.
    * All buildPadded + marchingCubes dispatches in one submission.
@@ -287,16 +282,9 @@ export class SculptEngine {
     }
 
     const geometry = chunkMesh.mesh.geometry;
-    if (meshData.interleaved) {
-      // GPU path: use InterleavedBuffer directly (zero de-interleave)
-      const ib = new THREE.InterleavedBuffer(meshData.interleaved, 6);
-      geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(ib, 3, 0));
-      geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(ib, 3, 3));
-    } else {
-      // CPU fallback path
-      geometry.setAttribute('position', new THREE.BufferAttribute(meshData.positions, 3));
-      geometry.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
-    }
+    const ib = new THREE.InterleavedBuffer(meshData.interleaved!, 6);
+    geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(ib, 3, 0));
+    geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(ib, 3, 3));
     geometry.computeBoundingSphere();
     chunkMesh.vertexCount = meshData.vertexCount;
   }

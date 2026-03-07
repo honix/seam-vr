@@ -79,7 +79,6 @@ export class SculptInteraction {
     if (state.isSculpting) {
       state.isSculpting = false;
       this.engine.endStroke(hand);
-      this.engine.flushPendingRemesh();
     }
   }
 }

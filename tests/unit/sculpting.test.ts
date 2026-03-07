@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Chunk } from '../../src/sculpting/chunk';
 import { SDFVolume } from '../../src/sculpting/sdf-volume';
-import { EDGE_TABLE, TRI_TABLE, CUBE_VERTICES } from '../../src/sculpting/marching-tables';
+import { EDGE_TABLE, TRI_TABLE } from '../../src/sculpting/marching-tables';
 import type { SculptConfig } from '../../src/sculpting/types';
 import { chunkKey, parseChunkKey } from '../../src/sculpting/types';
 
@@ -22,11 +22,13 @@ describe('Sculpting System', () => {
       }
     });
 
-    it('gets and sets SDF values correctly', () => {
+    it('data is writable', () => {
       const chunk = new Chunk({ x: 0, y: 0, z: 0 }, TEST_CONFIG);
-      chunk.set(3, 4, 5, -0.5);
-      expect(chunk.get(3, 4, 5)).toBe(-0.5);
-      expect(chunk.get(0, 0, 0)).toBe(1.0);
+      const s = chunk.samples;
+      const idx = 5 * s * s + 4 * s + 3; // iz=5, iy=4, ix=3
+      chunk.data[idx] = -0.5;
+      expect(chunk.data[idx]).toBe(-0.5);
+      expect(chunk.data[0]).toBe(1.0);
     });
   });
 
@@ -50,7 +52,6 @@ describe('Sculpting System', () => {
     it('have expected dimensions', () => {
       expect(EDGE_TABLE.length).toBe(256);
       expect(TRI_TABLE.length).toBe(256 * 16);
-      expect(CUBE_VERTICES.length).toBe(8);
     });
   });
 

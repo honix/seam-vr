@@ -28,16 +28,6 @@ export class SDFVolume {
     return this.chunks.get(chunkKey(coord));
   }
 
-  /** Remove a chunk (e.g., if it becomes fully empty) */
-  removeChunk(coord: ChunkCoord): void {
-    this.chunks.delete(chunkKey(coord));
-  }
-
-  /** Get all allocated chunks */
-  allChunks(): Chunk[] {
-    return Array.from(this.chunks.values());
-  }
-
   /** Convert world position to chunk coordinate */
   worldToChunkCoord(wx: number, wy: number, wz: number): ChunkCoord {
     const cs = this.config.chunkSize * this.config.voxelSize;

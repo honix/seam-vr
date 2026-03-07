@@ -15,6 +15,7 @@ import buildPaddedShader from '../shaders/build-padded.compute.wgsl?raw';
 interface ChunkGPUData {
   sdfBuffer: GPUBuffer;
   initialized: boolean;
+  cpuDirty: boolean;
 }
 
 // Max chunks per GPU round (pool slots). Overflow handled by multi-round.
@@ -237,7 +238,7 @@ export class GPUCompute {
         size: chunk.data.byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
       });
-      gpuData = { sdfBuffer: buffer, initialized: false };
+      gpuData = { sdfBuffer: buffer, initialized: false, cpuDirty: false };
       this.chunkBuffers.set(key, gpuData);
     }
     return gpuData;
@@ -245,7 +246,7 @@ export class GPUCompute {
 
   private ensureChunkUploaded(chunk: Chunk, key: string): ChunkGPUData {
     const gpuData = this.getChunkBuffer(chunk, key);
-    if (!gpuData.initialized) {
+    if (!gpuData.initialized || gpuData.cpuDirty) {
       this.device!.queue.writeBuffer(
         gpuData.sdfBuffer,
         0,
@@ -254,6 +255,7 @@ export class GPUCompute {
         chunk.data.byteLength
       );
       gpuData.initialized = true;
+      gpuData.cpuDirty = false;
     }
     return gpuData;
   }
@@ -280,6 +282,7 @@ export class GPUCompute {
 
         this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
         gpuData.initialized = true;
+        gpuData.cpuDirty = false;
 
         // Pack uniform struct matching WGSL BrushUniforms layout (80 bytes):
         //  0: center (vec3<f32>) + radius (f32)        = 16 bytes
@@ -356,6 +359,7 @@ export class GPUCompute {
         // Upload SDF data to chunk's GPU buffer (will be used as write target)
         this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
         gpuData.initialized = true;
+        gpuData.cpuDirty = false;
         // Copy same data to sdfCopyBuffer (read source for double-buffer)
         this.device.queue.writeBuffer(this.sdfCopyBuffers[i], 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
 
@@ -568,6 +572,13 @@ export class GPUCompute {
     if (gpuData) {
       gpuData.sdfBuffer.destroy();
       this.chunkBuffers.delete(key);
+    }
+  }
+
+  invalidateChunk(key: string): void {
+    const gpuData = this.chunkBuffers.get(key);
+    if (gpuData) {
+      gpuData.cpuDirty = true;
     }
   }
 

@@ -19,4 +19,11 @@ export class Chunk {
     this.data.fill(config.emptyValue);
   }
 
+  get(ix: number, iy: number, iz: number): number {
+    return this.data[iz * this.samples * this.samples + iy * this.samples + ix];
+  }
+
+  set(ix: number, iy: number, iz: number, value: number): void {
+    this.data[iz * this.samples * this.samples + iy * this.samples + ix] = value;
+  }
 }

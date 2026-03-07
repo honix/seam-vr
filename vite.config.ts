@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
@@ -10,9 +10,9 @@ export default defineConfig({
   assetsInclude: ['**/*.wgsl'],
   server: {
     port: 3000,
-    open: true,
+    open: mode !== 'vscode-debug',
   },
   build: {
     target: 'esnext',
   },
-});
+}));

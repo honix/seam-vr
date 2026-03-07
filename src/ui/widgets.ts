@@ -232,6 +232,8 @@ export class ColorWheelWidget implements Widget {
   private val = 1;
   private onChange: ((color: [number, number, number]) => void) | null;
   private wheelImage: ImageData | null = null;
+  private wheelCanvas: HTMLCanvasElement;
+  private wheelCtx: CanvasRenderingContext2D;
   private wheelSize = 128;
   private lastDrawnVal = -1;
   private dragMode: 'wheel' | 'bar' | null = null;
@@ -254,6 +256,10 @@ export class ColorWheelWidget implements Widget {
     this.w = w;
     this.h = h;
     this.onChange = config.onChange ?? null;
+    this.wheelCanvas = document.createElement('canvas');
+    this.wheelCanvas.width = this.wheelSize;
+    this.wheelCanvas.height = this.wheelSize;
+    this.wheelCtx = this.wheelCanvas.getContext('2d')!;
 
     // Wheel center and radius
     this.wheelR = Math.min(w * 0.35, h * 0.42);
@@ -304,20 +310,15 @@ export class ColorWheelWidget implements Widget {
       }
     }
     this.lastDrawnVal = this.val;
+    this.wheelCtx.putImageData(this.wheelImage, 0, 0);
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
     // Draw wheel via offscreen imagedata
     this.buildWheelImage();
     if (this.wheelImage) {
-      const tmpCanvas = document.createElement('canvas');
-      tmpCanvas.width = this.wheelSize;
-      tmpCanvas.height = this.wheelSize;
-      const tmpCtx = tmpCanvas.getContext('2d')!;
-      tmpCtx.putImageData(this.wheelImage, 0, 0);
-
       const drawSize = this.wheelR * 2;
-      ctx.drawImage(tmpCanvas,
+      ctx.drawImage(this.wheelCanvas,
         this.wheelCx - this.wheelR, this.wheelCy - this.wheelR,
         drawSize, drawSize);
     }

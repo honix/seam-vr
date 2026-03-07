@@ -60,9 +60,9 @@ export function initTestHarness(
     },
     openInspector(position?: Vec3) {
       const pos: Vec3 = position ?? [0.3, 1.2, -0.5];
-      uiManager?.toggleInspector(pos);
+      uiManager?.toggleInspector(pos, [0, 0, -1]);
       if (uiManager && !uiManager.inspector.isOpen) {
-        uiManager.toggleInspector(pos); // ensure open
+        uiManager.toggleInspector(pos, [0, 0, -1]); // ensure open
       }
     },
     closeInspector() {
@@ -72,9 +72,9 @@ export function initTestHarness(
     },
     openHierarchy(position?: Vec3) {
       const pos: Vec3 = position ?? [-0.3, 1.2, -0.5];
-      uiManager?.toggleHierarchy(pos);
+      uiManager?.toggleHierarchy(pos, [0, 0, -1]);
       if (uiManager && !uiManager.hierarchy.isOpen) {
-        uiManager.toggleHierarchy(pos); // ensure open
+        uiManager.toggleHierarchy(pos, [0, 0, -1]); // ensure open
       }
     },
     closeHierarchy() {

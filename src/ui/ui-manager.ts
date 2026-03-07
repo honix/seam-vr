@@ -46,12 +46,14 @@ export class UIManager {
     return [this.inspector, this.hierarchy];
   }
 
-  toggleInspector(position: Vec3): void {
-    this.inspector.toggle(position);
+  toggleInspector(position: Vec3, direction: Vec3): void {
+    const openPosition = this.computePanelOpenPosition(position, direction);
+    this.inspector.toggle(openPosition, position);
   }
 
-  toggleHierarchy(position: Vec3): void {
-    this.hierarchy.toggle(position);
+  toggleHierarchy(position: Vec3, direction: Vec3): void {
+    const openPosition = this.computePanelOpenPosition(position, direction);
+    this.hierarchy.toggle(openPosition, position);
     if (this.hierarchy.isOpen) {
       this.hierarchy.updateContent();
     }
@@ -69,5 +71,15 @@ export class UIManager {
     if (this.hierarchy.isOpen) {
       this.hierarchy.updateCanvas();
     }
+  }
+
+  private computePanelOpenPosition(position: Vec3, direction: Vec3): Vec3 {
+    const spawnDistance = 0.28;
+    const lift = 0.05;
+    return [
+      position[0] + direction[0] * spawnDistance,
+      position[1] + direction[1] * spawnDistance + lift,
+      position[2] + direction[2] * spawnDistance,
+    ];
   }
 }

@@ -89,7 +89,7 @@ export class SculptEngine {
 
   /**
    * Apply a sculpt stroke at the given world position.
-   * Remeshes brush-modified chunks immediately (4-8 chunks, 1 GPU round).
+   * Keeps boundary neighbors in sync and rebuilds all affected meshes immediately.
    */
   async stroke(worldPos: [number, number, number], hand: string = 'right'): Promise<void> {
     if (!this.gpu.ready) return;
@@ -115,8 +115,9 @@ export class SculptEngine {
         smoothing: this._brushSmoothing,
       };
 
-      // Cover the full capsule extent (both endpoints + radius)
-      const r = this._brushRadius + this._brushSmoothing;
+      // Match sdf-brush.compute.wgsl's early-exit radius so seam-adjacent chunks
+      // are always included when the smoothing halo crosses a chunk boundary.
+      const r = this._brushRadius + this._brushSmoothing * 2;
       const coords = new Map<string, ChunkCoord>();
       for (const c of this.volume.chunksInSphere(worldPos[0], worldPos[1], worldPos[2], r)) {
         coords.set(chunkKey(c), c);
@@ -136,8 +137,7 @@ export class SculptEngine {
 
       const t3 = performance.now();
 
-      // Immediate: remesh only brush-modified chunks (4-8, fits in 1 GPU round)
-      await this.remeshChunks(modifiedChunks);
+      const remeshCount = await this.syncAndRemeshChunks(modifiedChunks);
 
       const t4 = performance.now();
 
@@ -146,7 +146,7 @@ export class SculptEngine {
         console.log(
           `[Stroke] ${total.toFixed(1)}ms total | ` +
           `brush: ${(t2 - t1).toFixed(1)}ms (${modifiedChunks.length} chunks) | ` +
-          `remesh: ${(t4 - t3).toFixed(1)}ms (${modifiedChunks.length} chunks)`
+          `remesh: ${(t4 - t3).toFixed(1)}ms (${remeshCount} chunks)`
         );
       }
     } finally {
@@ -157,7 +157,7 @@ export class SculptEngine {
   /**
    * Apply a smooth stroke at the given world position.
    * Uses Laplacian smoothing via double-buffer GPU compute.
-   * Same capsule brush logic and deferred remesh pattern as stroke().
+   * Same capsule brush logic and boundary sync path as stroke().
    */
   async smoothStroke(worldPos: [number, number, number], hand: string = 'right'): Promise<void> {
     if (!this.gpu.ready) return;
@@ -203,8 +203,7 @@ export class SculptEngine {
 
       const t3 = performance.now();
 
-      // Immediate: remesh brush-modified chunks
-      await this.remeshChunks(modifiedChunks);
+      const remeshCount = await this.syncAndRemeshChunks(modifiedChunks);
 
       const t4 = performance.now();
 
@@ -213,7 +212,7 @@ export class SculptEngine {
         console.log(
           `[Smooth] ${total.toFixed(1)}ms total | ` +
           `smooth: ${(t2 - t1).toFixed(1)}ms (${modifiedChunks.length} chunks) | ` +
-          `remesh: ${(t4 - t3).toFixed(1)}ms (${modifiedChunks.length} chunks)`
+          `remesh: ${(t4 - t3).toFixed(1)}ms (${remeshCount} chunks)`
         );
       }
     } finally {
@@ -226,6 +225,18 @@ export class SculptEngine {
    */
   endStroke(hand: string = 'right'): void {
     this._prevStrokePos.set(hand, null);
+  }
+
+  private async syncAndRemeshChunks(modifiedChunks: Chunk[]): Promise<number> {
+    const extraChunks = this.volume.syncBoundaries(modifiedChunks);
+    const remeshChunks = [...modifiedChunks, ...extraChunks];
+
+    for (const chunk of remeshChunks) {
+      this.gpu.invalidateChunk(chunkKey(chunk.coord));
+    }
+
+    await this.remeshChunks(remeshChunks);
+    return remeshChunks.length;
   }
 
   /**
@@ -255,9 +266,6 @@ export class SculptEngine {
       this.updateChunkMesh(chunkKey(chunk.coord), meshData);
       chunk.empty = meshData.vertexCount === 0;
       chunk.dirty = false;
-      if (meshData.vertexCount === 0) {
-        this.removeChunkMesh(chunkKey(chunk.coord));
-      }
     }
   }
 

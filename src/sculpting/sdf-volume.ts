@@ -64,4 +64,139 @@ export class SDFVolume {
   get chunkCount(): number {
     return this.chunks.size;
   }
+
+  /**
+   * Sync shared boundary samples between modified chunks and their neighbors.
+   * The lower-coordinate chunk owns the shared boundary plane.
+   * Returns non-modified neighbors whose mesh must be rebuilt immediately.
+   */
+  syncBoundaries(modifiedChunks: Chunk[]): Chunk[] {
+    const cs = this.config.chunkSize;
+    const samples = cs + 1;
+    const modifiedKeys = new Set(modifiedChunks.map(c => chunkKey(c.coord)));
+    const additionalDirty: Chunk[] = [];
+    const seen = new Set<string>();
+
+    const markDirty = (chunk: Chunk, key: string) => {
+      chunk.dirty = true;
+      if (!modifiedKeys.has(key) && !seen.has(key)) {
+        additionalDirty.push(chunk);
+      }
+      seen.add(key);
+    };
+
+    for (const chunk of modifiedChunks) {
+      const { x, y, z } = chunk.coord;
+
+      const nxp = this.getChunk({ x: x + 1, y, z });
+      if (nxp) {
+        let changed = false;
+        for (let iz = 0; iz < samples; iz++) {
+          for (let iy = 0; iy < samples; iy++) {
+            const value = chunk.get(cs, iy, iz);
+            if (nxp.get(0, iy, iz) !== value) {
+              nxp.set(0, iy, iz, value);
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          markDirty(nxp, chunkKey({ x: x + 1, y, z }));
+        }
+      }
+
+      const nyp = this.getChunk({ x, y: y + 1, z });
+      if (nyp) {
+        let changed = false;
+        for (let iz = 0; iz < samples; iz++) {
+          for (let ix = 0; ix < samples; ix++) {
+            const value = chunk.get(ix, cs, iz);
+            if (nyp.get(ix, 0, iz) !== value) {
+              nyp.set(ix, 0, iz, value);
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          markDirty(nyp, chunkKey({ x, y: y + 1, z }));
+        }
+      }
+
+      const nzp = this.getChunk({ x, y, z: z + 1 });
+      if (nzp) {
+        let changed = false;
+        for (let iy = 0; iy < samples; iy++) {
+          for (let ix = 0; ix < samples; ix++) {
+            const value = chunk.get(ix, iy, cs);
+            if (nzp.get(ix, iy, 0) !== value) {
+              nzp.set(ix, iy, 0, value);
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          markDirty(nzp, chunkKey({ x, y, z: z + 1 }));
+        }
+      }
+
+      if (!modifiedKeys.has(chunkKey({ x: x - 1, y, z }))) {
+        const nxm = this.getChunk({ x: x - 1, y, z });
+        if (nxm) {
+          let changed = false;
+          for (let iz = 0; iz < samples; iz++) {
+            for (let iy = 0; iy < samples; iy++) {
+              const value = chunk.get(0, iy, iz);
+              if (nxm.get(cs, iy, iz) !== value) {
+                nxm.set(cs, iy, iz, value);
+                changed = true;
+              }
+            }
+          }
+          if (changed) {
+            markDirty(nxm, chunkKey({ x: x - 1, y, z }));
+          }
+        }
+      }
+
+      if (!modifiedKeys.has(chunkKey({ x, y: y - 1, z }))) {
+        const nym = this.getChunk({ x, y: y - 1, z });
+        if (nym) {
+          let changed = false;
+          for (let iz = 0; iz < samples; iz++) {
+            for (let ix = 0; ix < samples; ix++) {
+              const value = chunk.get(ix, 0, iz);
+              if (nym.get(ix, cs, iz) !== value) {
+                nym.set(ix, cs, iz, value);
+                changed = true;
+              }
+            }
+          }
+          if (changed) {
+            markDirty(nym, chunkKey({ x, y: y - 1, z }));
+          }
+        }
+      }
+
+      if (!modifiedKeys.has(chunkKey({ x, y, z: z - 1 }))) {
+        const nzm = this.getChunk({ x, y, z: z - 1 });
+        if (nzm) {
+          let changed = false;
+          for (let iy = 0; iy < samples; iy++) {
+            for (let ix = 0; ix < samples; ix++) {
+              const value = chunk.get(ix, iy, 0);
+              if (nzm.get(ix, iy, cs) !== value) {
+                nzm.set(ix, iy, cs, value);
+                changed = true;
+              }
+            }
+          }
+          if (changed) {
+            markDirty(nzm, chunkKey({ x, y, z: z - 1 }));
+          }
+        }
+      }
+    }
+
+    return additionalDirty;
+  }
 }

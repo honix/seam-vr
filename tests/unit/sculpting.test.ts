@@ -46,6 +46,46 @@ describe('Sculpting System', () => {
       expect(coord).toEqual({ x: 0, y: 0, z: 0 });
       expect(vol.worldToChunkCoord(0.09, 0, 0).x).toBe(1);
     });
+
+    it('syncs shared boundary samples into existing neighbors', () => {
+      const vol = new SDFVolume(TEST_CONFIG);
+      const left = vol.getOrCreateChunk({ x: 0, y: 0, z: 0 });
+      const right = vol.getOrCreateChunk({ x: 1, y: 0, z: 0 });
+      const cs = TEST_CONFIG.chunkSize;
+
+      left.set(cs, 4, 5, -0.25);
+
+      const extra = vol.syncBoundaries([left]);
+
+      expect(extra).toEqual([right]);
+      expect(right.dirty).toBe(true);
+      expect(right.get(0, 4, 5)).toBe(-0.25);
+    });
+
+    it('does not dirty neighbors when the shared boundary is unchanged', () => {
+      const vol = new SDFVolume(TEST_CONFIG);
+      const left = vol.getOrCreateChunk({ x: 0, y: 0, z: 0 });
+      vol.getOrCreateChunk({ x: 1, y: 0, z: 0 });
+
+      const extra = vol.syncBoundaries([left]);
+
+      expect(extra).toEqual([]);
+    });
+
+    it('uses the lower-coordinate chunk as the boundary authority', () => {
+      const vol = new SDFVolume(TEST_CONFIG);
+      const left = vol.getOrCreateChunk({ x: 0, y: 0, z: 0 });
+      const right = vol.getOrCreateChunk({ x: 1, y: 0, z: 0 });
+      const cs = TEST_CONFIG.chunkSize;
+
+      left.set(cs, 2, 3, -0.5);
+      right.set(0, 2, 3, 0.75);
+
+      const extra = vol.syncBoundaries([left, right]);
+
+      expect(extra).toEqual([]);
+      expect(right.get(0, 2, 3)).toBe(-0.5);
+    });
   });
 
   describe('Marching Tables', () => {

@@ -19,46 +19,11 @@ export class Chunk {
     this.data.fill(config.emptyValue);
   }
 
-  /** Get SDF value at local sample index [ix, iy, iz] */
   get(ix: number, iy: number, iz: number): number {
     return this.data[iz * this.samples * this.samples + iy * this.samples + ix];
   }
 
-  /** Set SDF value at local sample index */
   set(ix: number, iy: number, iz: number, value: number): void {
     this.data[iz * this.samples * this.samples + iy * this.samples + ix] = value;
-  }
-
-  /** Flat index from 3D sample coordinates */
-  index(ix: number, iy: number, iz: number): number {
-    return iz * this.samples * this.samples + iy * this.samples + ix;
-  }
-
-  /** World position of sample [ix, iy, iz] */
-  sampleWorldPos(
-    ix: number,
-    iy: number,
-    iz: number,
-    config: SculptConfig
-  ): [number, number, number] {
-    const originX = this.coord.x * config.chunkSize * config.voxelSize;
-    const originY = this.coord.y * config.chunkSize * config.voxelSize;
-    const originZ = this.coord.z * config.chunkSize * config.voxelSize;
-    return [
-      originX + ix * config.voxelSize,
-      originY + iy * config.voxelSize,
-      originZ + iz * config.voxelSize,
-    ];
-  }
-
-  /** Check if any sample is below the surface threshold */
-  updateEmpty(threshold: number = 0): void {
-    this.empty = true;
-    for (let i = 0; i < this.data.length; i++) {
-      if (this.data[i] <= threshold) {
-        this.empty = false;
-        return;
-      }
-    }
   }
 }

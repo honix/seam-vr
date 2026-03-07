@@ -62,14 +62,18 @@ describe('Sculpting System', () => {
       expect(right.get(0, 4, 5)).toBe(-0.25);
     });
 
-    it('does not dirty neighbors when the shared boundary is unchanged', () => {
+    it('queues seam neighbors even when only the ghost slice changed', () => {
       const vol = new SDFVolume(TEST_CONFIG);
       const left = vol.getOrCreateChunk({ x: 0, y: 0, z: 0 });
-      vol.getOrCreateChunk({ x: 1, y: 0, z: 0 });
+      const right = vol.getOrCreateChunk({ x: 1, y: 0, z: 0 });
+      const cs = TEST_CONFIG.chunkSize;
 
+      left.set(cs - 1, 4, 5, -0.125);
       const extra = vol.syncBoundaries([left]);
 
-      expect(extra).toEqual([]);
+      expect(extra).toEqual([right]);
+      expect(right.dirty).toBe(true);
+      expect(right.get(0, 4, 5)).toBe(TEST_CONFIG.emptyValue);
     });
 
     it('uses the lower-coordinate chunk as the boundary authority', () => {

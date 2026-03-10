@@ -141,6 +141,21 @@ export class UIManager {
     this.detachedPanels = this.detachedPanels.filter((panel) => panel.isOpen);
   }
 
+  dispose(): void {
+    for (const hand of ['left', 'right'] as const) {
+      this.closeLivePanel(hand);
+    }
+
+    for (const panel of this.detachedPanels) {
+      panel.close();
+      panel.dispose();
+    }
+    this.detachedPanels = [];
+
+    this.radialMenuL.dispose();
+    this.radialMenuR.dispose();
+  }
+
   getPanels(): ManagedPanel[] {
     return [
       ...Object.values(this.livePanels).filter((panel): panel is ManagedPanel => panel !== null),

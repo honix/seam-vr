@@ -18,6 +18,9 @@ export type ToolId =
 
 export type ToolCategory = 'sculpt' | 'spawn' | 'layer' | 'ui';
 
+export const MIN_BRUSH_RADIUS = 0.001;
+export const MAX_BRUSH_RADIUS = 0.1;
+
 export interface ToolDefinition {
   id: ToolId;
   label: string;
@@ -94,9 +97,15 @@ export class ToolSystem {
 
   adjustBrushRadius(hand: Hand, delta: number): void {
     if (hand === 'left') {
-      this.leftBrushRadius = Math.max(0.001, this.leftBrushRadius + delta);
+      this.leftBrushRadius = Math.min(
+        MAX_BRUSH_RADIUS,
+        Math.max(MIN_BRUSH_RADIUS, this.leftBrushRadius + delta),
+      );
     } else {
-      this.rightBrushRadius = Math.max(0.001, this.rightBrushRadius + delta);
+      this.rightBrushRadius = Math.min(
+        MAX_BRUSH_RADIUS,
+        Math.max(MIN_BRUSH_RADIUS, this.rightBrushRadius + delta),
+      );
     }
   }
 

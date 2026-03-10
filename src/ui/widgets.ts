@@ -531,6 +531,55 @@ export class DropdownWidget implements Widget {
   }
 }
 
+// --- ButtonWidget ---
+
+export interface ButtonConfig {
+  text: string;
+  onClick?: () => void;
+  fill?: string;
+  textColor?: string;
+}
+
+export class ButtonWidget implements Widget {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  private text: string;
+  private onClick: (() => void) | null;
+  private fill: string;
+  private textColor: string;
+
+  constructor(x: number, y: number, w: number, h: number, config: ButtonConfig) {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+    this.text = config.text;
+    this.onClick = config.onClick ?? null;
+    this.fill = config.fill ?? '#2a2a4e';
+    this.textColor = config.textColor ?? '#ffffff';
+  }
+
+  draw(ctx: CanvasRenderingContext2D): void {
+    ctx.fillStyle = this.fill;
+    ctx.beginPath();
+    ctx.roundRect(this.x, this.y, this.w, this.h, 6);
+    ctx.fill();
+
+    ctx.fillStyle = this.textColor;
+    ctx.font = '15px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(this.text, this.x + this.w / 2, this.y + this.h / 2);
+  }
+
+  onPointerDown(_localX: number, _localY: number): boolean {
+    this.onClick?.();
+    return true;
+  }
+}
+
 // --- ClickableRowWidget ---
 
 export interface ClickableRowConfig {

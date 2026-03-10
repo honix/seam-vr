@@ -6,7 +6,6 @@ import * as THREE from 'three';
 import {
   ToolSystem,
   ToolId,
-  TOOL_REGISTRY,
   ToolDefinition,
 } from '../interaction/tool-system';
 import { createTextTexture } from './canvas-text';
@@ -44,13 +43,29 @@ export class RadialMenu {
 
     this.group.visible = false;
     this.scene.add(this.group);
-    this.buildItems();
   }
 
-  private buildItems(): void {
-    const count = TOOL_REGISTRY.length;
+  private clearItems(): void {
+    for (const item of this.items) {
+      this.group.remove(item.discMesh);
+      this.group.remove(item.labelMesh);
+      this.group.remove(item.ringMesh);
+      item.discMesh.geometry.dispose();
+      (item.discMesh.material as THREE.Material).dispose();
+      item.labelMesh.geometry.dispose();
+      (item.labelMesh.material as THREE.MeshBasicMaterial).map?.dispose();
+      (item.labelMesh.material as THREE.Material).dispose();
+      item.ringMesh.geometry.dispose();
+      (item.ringMesh.material as THREE.Material).dispose();
+    }
+    this.items = [];
+  }
+
+  private buildItems(defs: ToolDefinition[]): void {
+    this.clearItems();
+    const count = defs.length;
     for (let i = 0; i < count; i++) {
-      const def = TOOL_REGISTRY[i];
+      const def = defs[i];
       const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
       const x = Math.cos(angle) * MENU_RADIUS;
       const y = Math.sin(angle) * MENU_RADIUS;
@@ -109,6 +124,7 @@ export class RadialMenu {
   }
 
   open(position: Vec3): void {
+    this.buildItems(this.toolSystem.getAvailableTools());
     this.group.position.set(position[0], position[1], position[2]);
     this.group.visible = true;
     this.isOpen = true;
@@ -195,14 +211,6 @@ export class RadialMenu {
 
   dispose(): void {
     this.scene.remove(this.group);
-    for (const item of this.items) {
-      item.discMesh.geometry.dispose();
-      (item.discMesh.material as THREE.Material).dispose();
-      item.labelMesh.geometry.dispose();
-      (item.labelMesh.material as THREE.MeshBasicMaterial).map?.dispose();
-      (item.labelMesh.material as THREE.Material).dispose();
-      item.ringMesh.geometry.dispose();
-      (item.ringMesh.material as THREE.Material).dispose();
-    }
+    this.clearItems();
   }
 }

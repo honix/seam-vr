@@ -26,6 +26,8 @@ declare global {
       closeInspector: () => void;
       openHierarchy: (position?: Vec3) => void;
       closeHierarchy: () => void;
+      openTimeline: () => void;
+      closeTimeline: () => void;
       panelState: () => object;
       focus: (target: Vec3, distance?: number) => void;
     };
@@ -39,6 +41,7 @@ export function initTestHarness(
   let uiManager: UIManager | null = null;
   let selectionManager: SelectionManager | null = null;
   let orbitControls: OrbitControls | null = null;
+  const getToolSystem = () => window.__seam.toolSystem ?? null;
 
   window.__seam = {
     exec(cmd: Command) {
@@ -56,40 +59,60 @@ export function initTestHarness(
       selectionManager?.selectById(nodeId);
     },
     deselect() {
-      selectionManager?.selectById('');
+      selectionManager?.selectById(null);
     },
     openInspector(position?: Vec3) {
-      const pos: Vec3 = position ?? [0.3, 1.2, -0.5];
-      uiManager?.toggleInspector(pos, [0, 0, -1]);
-      if (uiManager && !uiManager.inspector.isOpen) {
-        uiManager.toggleInspector(pos, [0, 0, -1]); // ensure open
+      const toolSystem = getToolSystem();
+      if (position && uiManager && toolSystem) {
+        uiManager.updateHandAnchors(
+          {
+            ...(window.__seam as any)._mockLeftState,
+            position,
+          },
+          (window.__seam as any)._mockRightState ?? {
+            position: [0.2, 1.2, -0.4],
+            rotation: [0, 0, 0, 1],
+          }
+        );
       }
+      toolSystem?.setTool('right', 'inspector');
     },
     closeInspector() {
-      if (uiManager?.inspector.isOpen) {
-        uiManager.inspector.close();
-      }
+      getToolSystem()?.setTool('right', 'select');
     },
     openHierarchy(position?: Vec3) {
-      const pos: Vec3 = position ?? [-0.3, 1.2, -0.5];
-      uiManager?.toggleHierarchy(pos, [0, 0, -1]);
-      if (uiManager && !uiManager.hierarchy.isOpen) {
-        uiManager.toggleHierarchy(pos, [0, 0, -1]); // ensure open
+      const toolSystem = getToolSystem();
+      if (position && uiManager && toolSystem) {
+        uiManager.updateHandAnchors(
+          (window.__seam as any)._mockLeftState ?? {
+            position: [-0.2, 1.2, -0.4],
+            rotation: [0, 0, 0, 1],
+          },
+          {
+            ...(window.__seam as any)._mockRightState,
+            position,
+          }
+        );
       }
+      toolSystem?.setTool('right', 'hierarchy');
     },
     closeHierarchy() {
-      if (uiManager?.hierarchy.isOpen) {
-        uiManager.hierarchy.close();
-      }
+      getToolSystem()?.setTool('right', 'select');
+    },
+    openTimeline() {
+      getToolSystem()?.setTool('right', 'timeline');
+    },
+    closeTimeline() {
+      getToolSystem()?.setTool('right', 'select');
     },
     panelState() {
+      const panels = uiManager?.getPanels() ?? [];
       return {
-        inspector: {
-          isOpen: uiManager?.inspector.isOpen ?? false,
-        },
-        hierarchy: {
-          isOpen: uiManager?.hierarchy.isOpen ?? false,
-        },
+        openPanels: panels.map((panel) => ({
+          kind: (panel as any).panelKind ?? 'panel',
+          hostMode: panel.hostMode,
+          isOpen: panel.isOpen,
+        })),
       };
     },
     focus(target: Vec3, distance = 0.6) {

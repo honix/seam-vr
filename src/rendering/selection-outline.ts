@@ -36,6 +36,14 @@ export class SelectionOutline {
     node.mesh.add(this.outlineMesh);
   }
 
+  setTargetObject(object: THREE.Object3D): void {
+    if (object instanceof THREE.Mesh) {
+      this.setTarget({ mesh: object } as SceneNode);
+      return;
+    }
+    this.setTargetGroup(object as THREE.Group);
+  }
+
   /**
    * Show box wireframe around a group (for sculpt volume).
    */

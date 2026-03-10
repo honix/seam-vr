@@ -1,10 +1,9 @@
 // Sculpt interaction handler for VR controllers.
-// Per-hand sculpt state: each hand can independently sculpt with its own tool.
-// Called by InteractionManager (not directly from the render loop).
+// Per-hand sculpt state: each hand can independently sculpt on the selected clay node.
 
-import type { SculptEngine } from './sculpt-engine';
 import type { BrushType } from './types';
 import type { ToolId } from '../interaction/tool-system';
+import { ClayManager } from './clay-manager';
 
 type Hand = 'left' | 'right';
 
@@ -20,65 +19,57 @@ const TOOL_TO_BRUSH: Partial<Record<ToolId, BrushType>> = {
 };
 
 export class SculptInteraction {
-  private engine: SculptEngine;
+  private clayManager: ClayManager;
   private handState: Map<Hand, HandSculptState> = new Map();
 
-  constructor(engine: SculptEngine) {
-    this.engine = engine;
+  constructor(clayManager: ClayManager) {
+    this.clayManager = clayManager;
     this.handState.set('left', { isSculpting: false, brushType: 'add' });
     this.handState.set('right', { isSculpting: false, brushType: 'add' });
   }
 
-  /**
-   * Begin a sculpt stroke for a hand.
-   */
   beginStroke(hand: Hand, toolId: ToolId, position: [number, number, number], strength: number): void {
     const brushType = TOOL_TO_BRUSH[toolId];
-    if (!brushType) return;
+    const engine = this.clayManager.getActiveEngine();
+    const localPosition = this.clayManager.toActiveClayLocalPosition(position);
+    if (!brushType || !engine || !localPosition) return;
 
     const state = this.handState.get(hand)!;
+    state.isSculpting = true;
     state.brushType = brushType;
 
+    engine.brushStrength = strength;
     if (brushType === 'smooth') {
-      state.isSculpting = true;
-      state.brushType = brushType;
-      this.engine.brushStrength = strength;
-      this.engine.smoothStroke(position, hand);
+      engine.smoothStroke(localPosition, hand);
     } else {
-      state.isSculpting = true;
-      this.engine.brushType = brushType;
-      this.engine.brushStrength = strength;
-      this.engine.stroke(position, hand);
+      engine.brushType = brushType;
+      engine.stroke(localPosition, hand);
     }
   }
 
-  /**
-   * Update an ongoing sculpt stroke for a hand.
-   */
   updateStroke(hand: Hand, position: [number, number, number], strength: number, brushRadius: number): void {
     const state = this.handState.get(hand)!;
+    if (!state.isSculpting) return;
 
-    if (state.isSculpting) {
-      this.engine.brushStrength = strength;
-      this.engine.brushRadius = brushRadius;
-      if (state.brushType === 'smooth') {
-        this.engine.smoothStroke(position, hand);
-      } else {
-        this.engine.brushType = state.brushType;
-        this.engine.stroke(position, hand);
-      }
+    const engine = this.clayManager.getActiveEngine();
+    const localPosition = this.clayManager.toActiveClayLocalPosition(position);
+    if (!engine || !localPosition) return;
+
+    engine.brushStrength = strength;
+    engine.brushRadius = this.clayManager.toActiveClayLocalRadius(brushRadius);
+    if (state.brushType === 'smooth') {
+      engine.smoothStroke(localPosition, hand);
+    } else {
+      engine.brushType = state.brushType;
+      engine.stroke(localPosition, hand);
     }
   }
 
-  /**
-   * End a sculpt stroke for a hand.
-   */
   endStroke(hand: Hand): void {
     const state = this.handState.get(hand)!;
+    if (!state.isSculpting) return;
 
-    if (state.isSculpting) {
-      state.isSculpting = false;
-      this.engine.endStroke(hand);
-    }
+    state.isSculpting = false;
+    this.clayManager.getActiveEngine()?.endStroke(hand);
   }
 }

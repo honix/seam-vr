@@ -25,10 +25,8 @@ function triggerStrength(value: number): number {
   return Math.max(0, (value - TRIGGER_DEAD_ZONE) / (1 - TRIGGER_DEAD_ZONE));
 }
 
-// Callbacks for UI tool actions
-export interface UICallbacks {
-  toggleInspector?: (position: Vec3, direction: Vec3) => void;
-  toggleHierarchy?: (position: Vec3, direction: Vec3) => void;
+export interface UIPanelActions {
+  detachPanel?: (panel: FloatingPanel) => FloatingPanel | null;
 }
 
 // Per-hand state when trigger is interacting with a panel
@@ -49,10 +47,10 @@ export class InteractionManager {
   private worldNavigation: WorldNavigation | null = null;
   private layerGrabSystem: LayerGrabSystem | null = null;
   private selectionManager: SelectionManager | null = null;
-  private uiCallbacks: UICallbacks = {};
+  private panelActions: UIPanelActions = {};
 
   // Panel system
-  private panels: FloatingPanel[] = [];
+  private panelProvider: (() => FloatingPanel[]) | null = null;
   private panelTriggerState: Map<string, PanelTriggerState> = new Map(); // hand → trigger panel interaction
 
   constructor(
@@ -87,12 +85,12 @@ export class InteractionManager {
     this.selectionManager = sm;
   }
 
-  setPanels(panels: FloatingPanel[]): void {
-    this.panels = panels;
+  setPanelProvider(provider: () => FloatingPanel[]): void {
+    this.panelProvider = provider;
   }
 
-  setUICallbacks(callbacks: UICallbacks): void {
-    this.uiCallbacks = callbacks;
+  setUIPanelActions(actions: UIPanelActions): void {
+    this.panelActions = actions;
   }
 
   /** Transform a world-space controller position into worldGroup local space. */
@@ -170,8 +168,9 @@ export class InteractionManager {
    */
   private tryPanelTriggerStart(hand: 'left' | 'right', position: Vec3, direction: Vec3): boolean {
     const ray = this.buildRaycaster(position, direction);
+    const panels = this.panelProvider ? this.panelProvider() : [];
 
-    for (const panel of this.panels) {
+    for (const panel of panels) {
       if (!panel.isOpen) continue;
 
       // Test interactive controls first (sliders, pickers, dropdowns)
@@ -183,14 +182,26 @@ export class InteractionManager {
 
       // Then test panel surface (title bar, resize, body)
       const hit = panel.rayHitTest(ray);
+      if (hit === 'close') {
+        panel.close();
+        return true;
+      }
       if (hit === 'resize') {
         panel.beginResize(ray);
         this.panelTriggerState.set(hand, { panel, mode: 'resize' });
         return true;
       }
       if (hit === 'title') {
-        panel.beginRayGrab(ray, this.getControllerRotation(hand));
-        this.panelTriggerState.set(hand, { panel, mode: 'drag' });
+        let dragPanel = panel;
+        if (panel.hostMode === 'hand') {
+          const detached = this.panelActions.detachPanel?.(panel) ?? null;
+          if (!detached) {
+            return true;
+          }
+          dragPanel = detached;
+        }
+        dragPanel.beginRayGrab(ray, this.getControllerRotation(hand));
+        this.panelTriggerState.set(hand, { panel: dragPanel, mode: 'drag' });
         return true;
       }
       if (hit === 'body') {
@@ -281,10 +292,6 @@ export class InteractionManager {
         } else if (isSelectTool(tool)) {
           // No panel hit — raycast into scene for selection
           this.selectionManager?.raySelect(action.position, action.direction);
-        } else if (tool === 'inspector') {
-          this.uiCallbacks.toggleInspector?.(action.position, action.direction);
-        } else if (tool === 'hierarchy') {
-          this.uiCallbacks.toggleHierarchy?.(action.position, action.direction);
         }
         break;
       }

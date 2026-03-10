@@ -1,5 +1,4 @@
-// Inspector panel - shows and edits properties of the selected layer.
-// Content rendered via Canvas 2D widgets on PanelCanvas.
+// Inspector panel - shows and edits properties of the selected node.
 
 import * as THREE from 'three';
 import { FloatingPanel } from './floating-panel';
@@ -11,11 +10,8 @@ import {
   ColorWheelWidget,
   DropdownWidget,
 } from './widgets';
-import type { SculptEngine } from '../sculpting/sculpt-engine';
+import type { ClayManager } from '../sculpting/clay-manager';
 
-// Padding and widget heights in canvas pixels.
-// Actual pixel counts are derived from mesh size at 2048 PPM, but we use
-// proportional values so layout works at any panel size.
 const PAD_X = 10;
 const ROW_H = 28;
 const SLIDER_H = 52;
@@ -23,20 +19,22 @@ const COLOR_WHEEL_H = 150;
 const DROPDOWN_H = 30;
 
 export class InspectorPanel extends FloatingPanel {
+  readonly panelKind = 'inspector';
+
   private selectedNode: SceneNode | null = null;
   private commandBus: CommandBus | null = null;
-  private sculptEngine: SculptEngine | null = null;
+  private clayManager: ClayManager | null = null;
 
   constructor(parent: THREE.Object3D) {
-    super(parent, 'Inspector', 0.25, 0.45);
+    super(parent, 'Inspector', 0.26, 0.48);
   }
 
   setCommandBus(bus: CommandBus): void {
     this.commandBus = bus;
   }
 
-  setSculptEngine(engine: SculptEngine): void {
-    this.sculptEngine = engine;
+  setClayManager(manager: ClayManager): void {
+    this.clayManager = manager;
   }
 
   setSelectedNode(node: SceneNode | null): void {
@@ -44,6 +42,10 @@ export class InspectorPanel extends FloatingPanel {
     if (this.isOpen) {
       this.updateContent();
     }
+  }
+
+  getSelectedNode(): SceneNode | null {
+    return this.selectedNode;
   }
 
   protected buildContent(): void {
@@ -57,7 +59,7 @@ export class InspectorPanel extends FloatingPanel {
 
     if (!this.selectedNode) {
       this.panelCanvas.addWidget(
-        new LabelWidget(PAD_X, 10, contentW, ROW_H, { text: 'No layer selected', color: '#888888' })
+        new LabelWidget(PAD_X, 10, contentW, ROW_H, { text: 'No node selected', color: '#888888' })
       );
       this.panelCanvas.markDirty();
       return;
@@ -76,12 +78,27 @@ export class InspectorPanel extends FloatingPanel {
     );
     y += ROW_H + 8;
 
-    if (node.layerType === 'primitive') {
-      y = this.buildPrimitiveWidgets(node, y, contentW);
-    } else if (node.layerType === 'light') {
-      y = this.buildLightWidgets(node, y, contentW);
-    } else if (node.nodeType === 'sculpt_volume') {
-      y = this.buildSculptWidgets(y, contentW);
+    switch (node.nodeType) {
+      case 'light':
+        y = this.buildLightWidgets(node, y, contentW);
+        break;
+      case 'clay':
+        y = this.buildClayWidgets(node, y, contentW);
+        break;
+      case 'animation_player':
+        y = this.buildAnimationPlayerWidgets(node, y, contentW);
+        break;
+      case 'group':
+        this.panelCanvas.addWidget(
+          new LabelWidget(PAD_X, y, contentW, ROW_H, {
+            text: 'Group node for organization and parenting.',
+            color: '#aaaaaa',
+          })
+        );
+        break;
+      default:
+        y = this.buildPrimitiveWidgets(node, y, contentW);
+        break;
     }
 
     this.panelCanvas.markDirty();
@@ -144,7 +161,7 @@ export class InspectorPanel extends FloatingPanel {
       },
     });
     dropdown.onExpandChange = () => {
-      this.relayoutFromDropdown();
+      this.updateContent();
     };
     this.panelCanvas.addWidget(dropdown);
     y += DROPDOWN_H + 8;
@@ -188,10 +205,15 @@ export class InspectorPanel extends FloatingPanel {
     return y;
   }
 
-  private buildSculptWidgets(y: number, contentW: number): number {
-    if (!this.sculptEngine) return y;
-
-    const mat = this.sculptEngine.sculptMaterial;
+  private buildClayWidgets(node: SceneNode, y: number, contentW: number): number {
+    const engine = this.clayManager?.getEngine(node.id) ?? null;
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, {
+        text: engine ? 'Clay node' : 'Clay node (initializing...)',
+        color: '#aaaaaa',
+      })
+    );
+    y += ROW_H + 4;
 
     this.panelCanvas.addWidget(
       new LabelWidget(PAD_X, y, contentW, ROW_H, { text: 'Color Tint', fontSize: 16, color: '#aaaaaa' })
@@ -200,11 +222,13 @@ export class InspectorPanel extends FloatingPanel {
 
     this.panelCanvas.addWidget(
       new ColorWheelWidget(PAD_X, y, contentW, COLOR_WHEEL_H, {
-        color: [mat.color.r, mat.color.g, mat.color.b],
+        color: [...node.material.color] as [number, number, number],
         onChange: (color) => {
-          if (this.sculptEngine) {
-            this.sculptEngine.sculptMaterial.color.setRGB(color[0], color[1], color[2]);
-          }
+          this.commandBus?.exec({
+            cmd: 'set_material',
+            id: node.id,
+            material: { color },
+          });
         },
       })
     );
@@ -215,11 +239,13 @@ export class InspectorPanel extends FloatingPanel {
         label: 'Roughness',
         min: 0,
         max: 1,
-        value: mat.roughness,
+        value: node.material.roughness,
         onChange: (value) => {
-          if (this.sculptEngine) {
-            this.sculptEngine.sculptMaterial.roughness = value;
-          }
+          this.commandBus?.exec({
+            cmd: 'set_material',
+            id: node.id,
+            material: { roughness: value },
+          });
         },
       })
     );
@@ -228,11 +254,32 @@ export class InspectorPanel extends FloatingPanel {
     return y;
   }
 
-  private relayoutFromDropdown(): void {
-    this.updateContent();
-  }
+  private buildAnimationPlayerWidgets(node: SceneNode, y: number, contentW: number): number {
+    const data = node.animationPlayerData;
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, {
+        text: `Targets: ${data?.targetIds.length ?? 0}`,
+        color: '#aaaaaa',
+      })
+    );
+    y += ROW_H;
 
-  override dispose(): void {
-    super.dispose();
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H, {
+        text: `Clips: ${data?.clipIds.length ?? 0}`,
+        color: '#aaaaaa',
+      })
+    );
+    y += ROW_H;
+
+    this.panelCanvas.addWidget(
+      new LabelWidget(PAD_X, y, contentW, ROW_H * 2, {
+        text: 'Animation authoring is not implemented yet.',
+        color: '#888888',
+      })
+    );
+    y += ROW_H * 2;
+
+    return y;
   }
 }

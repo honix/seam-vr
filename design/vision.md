@@ -21,7 +21,7 @@ A browser-based VR platform where anyone can create, animate, and share 3D inter
 Layered complexity for different skill levels:
 
 1. **Casual creators** - spawn shapes, pose them, take screenshots, share. Like building with digital clay. No code needed.
-2. **Artists & animators** - performance capture + keyframe refinement for short films and loops. Export to video or interactive viewer.
+2. **Artists & animators** - layered keyframe animation, IK, and optional performance capture for short films and loops. Export to video or interactive viewer.
 3. **Makers & indie devs** - add scripting and logic to create interactive experiences, games, educational content.
 4. **AI-assisted creators** - describe what you want, AI helps build geometry, write logic, suggest animations.
 

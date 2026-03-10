@@ -29,4 +29,12 @@ describe('ToolSystem', () => {
     expect(toolSystem.getTool('left')).toBe('select');
     expect(callback).toHaveBeenLastCalledWith('left', 'select');
   });
+
+  it('clamps brush radius to a sane upper bound', () => {
+    const toolSystem = new ToolSystem();
+
+    toolSystem.adjustBrushRadius('left', 10);
+
+    expect(toolSystem.getBrushRadius('left')).toBe(0.1);
+  });
 });

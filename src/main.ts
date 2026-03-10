@@ -208,8 +208,36 @@ async function init() {
   const clock = new THREE.Clock();
   let frameCount = 0;
   let frameTotalMs = 0;
+  let disposed = false;
+  const hot = (import.meta as ImportMeta & {
+    hot?: { dispose(callback: () => void): void };
+  }).hot;
+
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+
+    renderer.setAnimationLoop(null);
+    window.removeEventListener('resize', handleResize);
+    window.removeEventListener('pagehide', dispose);
+
+    uiManager.dispose();
+    lightGizmo.dispose();
+    selectionOutline.dispose();
+    brushPreview.dispose();
+    clayManager.dispose();
+
+    renderer.dispose();
+    renderer.forceContextLoss?.();
+    renderer.domElement.remove();
+  };
+  window.addEventListener('pagehide', dispose, { once: true });
+  if (hot) {
+    hot.dispose(dispose);
+  }
 
   renderer.setAnimationLoop(() => {
+    if (disposed) return;
     const frameStart = performance.now();
     const deltaTime = clock.getDelta();
 

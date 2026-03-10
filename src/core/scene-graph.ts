@@ -7,6 +7,8 @@ import {
   MaterialData,
   DEFAULT_MATERIAL,
   DeformerType,
+  AnimationPlayerData,
+  ClayData,
 } from '../types';
 import type { LayerType, LightData } from './layer-types';
 
@@ -26,13 +28,15 @@ export class SceneNode {
   parent: SceneNode | null;
   children: SceneNode[];
   mesh: THREE.Mesh | null;
+  object3D: THREE.Object3D | null;
 
   // Layer system fields
   layerType: LayerType;
   visible: boolean;
   locked: boolean;
   lightData: LightData | null;
-  sculptVolumeId: string | null;
+  animationPlayerData: AnimationPlayerData | null;
+  clayData: ClayData | null;
 
   constructor(
     id: string,
@@ -55,13 +59,15 @@ export class SceneNode {
     this.parent = null;
     this.children = [];
     this.mesh = null;
+    this.object3D = null;
 
     // Layer defaults
     this.layerType = 'primitive';
     this.visible = true;
     this.locked = false;
     this.lightData = null;
-    this.sculptVolumeId = null;
+    this.animationPlayerData = null;
+    this.clayData = null;
   }
 }
 

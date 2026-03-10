@@ -40,18 +40,29 @@ export class LayerGrabSystem {
 
     this.sceneGraph.traverse((node) => {
       if (node.locked) return;
-      if (!node.mesh) return;
+      const anchor = node.object3D ?? node.mesh;
+      if (!anchor) return;
 
-      const meshWorldPos = new THREE.Vector3();
-      node.mesh.getWorldPosition(meshWorldPos);
-      const dist = handPos.distanceTo(meshWorldPos);
+      const anchorWorldPos = new THREE.Vector3();
+      anchor.getWorldPosition(anchorWorldPos);
+      const dist = handPos.distanceTo(anchorWorldPos);
 
-      if (!node.mesh.geometry.boundingSphere) {
-        node.mesh.geometry.computeBoundingSphere();
+      let surfaceDist = dist;
+
+      if (node.mesh?.geometry) {
+        if (!node.mesh.geometry.boundingSphere) {
+          node.mesh.geometry.computeBoundingSphere();
+        }
+        const bs = node.mesh.geometry.boundingSphere;
+        const maxScale = Math.max(anchor.scale.x, anchor.scale.y, anchor.scale.z);
+        surfaceDist = bs ? Math.max(0, dist - bs.radius * maxScale) : dist;
+      } else {
+        const box = new THREE.Box3().setFromObject(anchor);
+        if (!box.isEmpty()) {
+          const closestPoint = box.clampPoint(handPos.clone(), new THREE.Vector3());
+          surfaceDist = handPos.distanceTo(closestPoint);
+        }
       }
-      const bs = node.mesh.geometry.boundingSphere;
-      const maxScale = Math.max(node.mesh.scale.x, node.mesh.scale.y, node.mesh.scale.z);
-      const surfaceDist = bs ? Math.max(0, dist - bs.radius * maxScale) : dist;
 
       if (surfaceDist < closestDist) {
         closestDist = surfaceDist;
@@ -62,11 +73,11 @@ export class LayerGrabSystem {
     if (!closestNode) return false;
     const node = closestNode as SceneNode;
 
-    const meshPos = new THREE.Vector3(...node.transform.position);
+    const anchorPos = new THREE.Vector3(...node.transform.position);
     const handQuat = new THREE.Quaternion(...rotation);
 
     // Store offset in controller-local space so it rotates with the hand
-    const worldOffset = meshPos.clone().sub(handPos);
+    const worldOffset = anchorPos.clone().sub(handPos);
     const offsetPos = worldOffset.applyQuaternion(handQuat.clone().invert());
 
     const meshQuat = new THREE.Quaternion(
@@ -114,9 +125,10 @@ export class LayerGrabSystem {
     const newQuat = handQuat.clone().multiply(grab.offsetQuaternion);
     node.transform.rotation = [newQuat.x, newQuat.y, newQuat.z, newQuat.w];
 
-    if (node.mesh) {
-      node.mesh.position.copy(newPos);
-      node.mesh.quaternion.copy(newQuat);
+    const anchor = node.object3D ?? node.mesh;
+    if (anchor) {
+      anchor.position.copy(newPos);
+      anchor.quaternion.copy(newQuat);
     }
   }
 

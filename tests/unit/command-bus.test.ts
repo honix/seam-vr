@@ -5,6 +5,30 @@ import { registerAllCommands } from '../../src/core/commands';
 
 // Mock Three.js - vitest runs in Node, no WebGL
 vi.mock('three', () => {
+  class Object3D {
+    position = new Vector3();
+    quaternion = new Quaternion();
+    scale = new Vector3(1, 1, 1);
+    visible = true;
+    parent: Object3D | null = null;
+    children: Object3D[] = [];
+    type = 'Object3D';
+    add(child: Object3D) {
+      child.parent = this;
+      this.children.push(child);
+    }
+    remove(child: Object3D) {
+      this.children = this.children.filter((item) => item !== child);
+      child.parent = null;
+    }
+    removeFromParent() {
+      this.parent?.remove(this);
+    }
+    attach(child: Object3D) {
+      this.add(child);
+    }
+  }
+
   class Vector3 {
     x: number;
     y: number;
@@ -43,7 +67,22 @@ vi.mock('three', () => {
   }
 
   class BufferGeometry {
+    private attributes = new Map<string, any>();
     dispose() {}
+    clone() {
+      const clone = new BufferGeometry();
+      for (const [key, value] of this.attributes.entries()) {
+        clone.setAttribute(key, value);
+      }
+      return clone;
+    }
+    setAttribute(name: string, value: any) {
+      this.attributes.set(name, value);
+    }
+    getAttribute(name: string) {
+      return this.attributes.get(name) ?? { array: new Float32Array(0), needsUpdate: false };
+    }
+    computeVertexNormals() {}
   }
 
   class Color {
@@ -63,15 +102,14 @@ vi.mock('three', () => {
     }
   }
 
-  class Mesh {
+  class Mesh extends Object3D {
     geometry: BufferGeometry;
     material: any;
-    position = new Vector3();
-    quaternion = new Quaternion();
-    scale = new Vector3(1, 1, 1);
     constructor(geometry?: BufferGeometry, material?: any) {
+      super();
       this.geometry = geometry || new BufferGeometry();
       this.material = material || {};
+      this.type = 'Mesh';
     }
   }
 
@@ -86,6 +124,33 @@ vi.mock('three', () => {
     }
   }
 
+  class MeshBasicMaterial extends MeshStandardMaterial {}
+  class Group extends Object3D {}
+  class PointLight extends Object3D {
+    color: Color;
+    intensity: number;
+    constructor(color = new Color(), intensity = 1) {
+      super();
+      this.color = color;
+      this.intensity = intensity;
+      this.type = 'PointLight';
+    }
+  }
+  class DirectionalLight extends PointLight {
+    target: Object3D = new Object3D();
+    constructor(color = new Color(), intensity = 1) {
+      super(color, intensity);
+      this.type = 'DirectionalLight';
+    }
+  }
+  class SpotLight extends PointLight {
+    target: Object3D = new Object3D();
+    constructor(color = new Color(), intensity = 1) {
+      super(color, intensity);
+      this.type = 'SpotLight';
+    }
+  }
+
   class CylinderGeometry extends BufferGeometry {}
   class SphereGeometry extends BufferGeometry {}
   class BoxGeometry extends BufferGeometry {}
@@ -96,12 +161,18 @@ vi.mock('three', () => {
   class CatmullRomCurve3 {}
 
   return {
+    Object3D,
     Vector3,
     Quaternion,
     BufferGeometry,
     Color,
     Mesh,
     MeshStandardMaterial,
+    MeshBasicMaterial,
+    Group,
+    PointLight,
+    DirectionalLight,
+    SpotLight,
     CylinderGeometry,
     SphereGeometry,
     BoxGeometry,
@@ -146,6 +217,36 @@ describe('CommandBus', () => {
       const { sg, bus } = setup();
       bus.exec({ cmd: 'spawn', id: 'b1', type: 'box' });
       expect(sg.getNode('b1')!.mesh).toBeDefined();
+    });
+  });
+
+  describe('structural node creation', () => {
+    it('creates a group node', () => {
+      const { sg, bus } = setup();
+      bus.exec({ cmd: 'create_group', id: 'group1' });
+      const node = sg.getNode('group1');
+      expect(node).toBeDefined();
+      expect(node!.nodeType).toBe('group');
+      expect(node!.layerType).toBe('group');
+    });
+
+    it('creates an animation_player node', () => {
+      const { sg, bus } = setup();
+      bus.exec({ cmd: 'create_animation_player', id: 'player1' });
+      const node = sg.getNode('player1');
+      expect(node).toBeDefined();
+      expect(node!.nodeType).toBe('animation_player');
+      expect(node!.animationPlayerData).toBeDefined();
+    });
+
+    it('creates a clay node', () => {
+      const { sg, bus } = setup();
+      bus.exec({ cmd: 'create_clay', id: 'clay1' });
+      const node = sg.getNode('clay1');
+      expect(node).toBeDefined();
+      expect(node!.nodeType).toBe('clay');
+      expect(node!.layerType).toBe('clay');
+      expect(node!.clayData?.clayId).toBe('clay1');
     });
   });
 

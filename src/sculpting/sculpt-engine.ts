@@ -8,6 +8,7 @@ import { Chunk } from './chunk';
 import { GPUCompute } from './gpu-compute';
 import type { BrushParams, BrushType, SculptConfig, MeshData, ChunkCoord } from './types';
 import { DEFAULT_SCULPT_CONFIG, chunkKey } from './types';
+import type { MaterialData } from '../types';
 
 interface ChunkMeshData {
   mesh: THREE.Mesh;
@@ -18,7 +19,7 @@ export class SculptEngine {
   readonly volume: SDFVolume;
   readonly config: SculptConfig;
 
-  private scene: THREE.Scene;
+  private parent: THREE.Object3D;
   private gpu: GPUCompute;
 
   // Three.js meshes per chunk
@@ -39,8 +40,8 @@ export class SculptEngine {
   // Sculpt group in scene
   sculptGroup: THREE.Group;
 
-  constructor(scene: THREE.Scene, config: SculptConfig = DEFAULT_SCULPT_CONFIG) {
-    this.scene = scene;
+  constructor(parent: THREE.Object3D, config: SculptConfig = DEFAULT_SCULPT_CONFIG, groupName = 'sculpt_volume') {
+    this.parent = parent;
     this.config = config;
     this.volume = new SDFVolume(config);
     this.gpu = new GPUCompute(config);
@@ -54,8 +55,8 @@ export class SculptEngine {
 
     // Group to hold all chunk meshes
     this.sculptGroup = new THREE.Group();
-    this.sculptGroup.name = 'sculpt_volume';
-    this.scene.add(this.sculptGroup);
+    this.sculptGroup.name = groupName;
+    this.parent.add(this.sculptGroup);
   }
 
   /**
@@ -125,7 +126,7 @@ export class SculptEngine {
       for (const c of this.volume.chunksInSphere(prevPos[0], prevPos[1], prevPos[2], r)) {
         coords.set(chunkKey(c), c);
       }
-      const modifiedChunks: Chunk[] = [...coords.values()].map(c => this.volume.getOrCreateChunk(c));
+      const modifiedChunks: Chunk[] = [...coords.values()].map((c) => this.volume.getOrCreateChunk(c));
 
       const t1 = performance.now();
       await this.gpu.applyBrushBatch(modifiedChunks, brush);
@@ -191,7 +192,7 @@ export class SculptEngine {
       for (const c of this.volume.chunksInSphere(prevPos[0], prevPos[1], prevPos[2], r)) {
         coords.set(chunkKey(c), c);
       }
-      const modifiedChunks: Chunk[] = [...coords.values()].map(c => this.volume.getOrCreateChunk(c));
+      const modifiedChunks: Chunk[] = [...coords.values()].map((c) => this.volume.getOrCreateChunk(c));
 
       const t1 = performance.now();
       await this.gpu.applySmoothBatch(this.createChunkNeighborhoodItems(modifiedChunks), brush);
@@ -329,6 +330,12 @@ export class SculptEngine {
     };
   }
 
+  applyMaterial(material: MaterialData): void {
+    this.sculptMaterial.color.setRGB(material.color[0], material.color[1], material.color[2]);
+    this.sculptMaterial.roughness = material.roughness;
+    this.sculptMaterial.metalness = material.metallic;
+  }
+
   /**
    * Dispose all resources
    */
@@ -339,7 +346,7 @@ export class SculptEngine {
     }
     this.chunkMeshes.clear();
     this.sculptMaterial.dispose();
-    this.scene.remove(this.sculptGroup);
+    this.parent.remove(this.sculptGroup);
     this.gpu.destroy();
   }
 }

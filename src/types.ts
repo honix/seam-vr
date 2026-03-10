@@ -3,6 +3,7 @@
 export type Vec3 = [number, number, number];
 export type Vec4 = [number, number, number, number]; // quaternion
 export type Color = [number, number, number]; // RGB 0-1
+export type Hand = 'left' | 'right';
 
 export interface Transform {
   position: Vec3;
@@ -27,7 +28,25 @@ export type PrimitiveType =
   | 'tube';
 
 // Extended node types (includes non-primitive layer types)
-export type NodeType = PrimitiveType | 'group' | 'light' | 'sculpt_volume';
+export type NodeType =
+  | PrimitiveType
+  | 'group'
+  | 'light'
+  | 'clay'
+  | 'animation_player';
+
+export interface AnimationPlayerData {
+  clipIds: string[];
+  targetIds: string[];
+  mode: 'override' | 'additive';
+  weight: number;
+  loop: boolean;
+  timeScale: number;
+}
+
+export interface ClayData {
+  clayId: string;
+}
 
 // Deformer types
 export type DeformerType = 'bend' | 'taper' | 'twist' | 'lattice' | 'noise';

@@ -5,6 +5,8 @@ import { Vec3, Vec4 } from '../types';
 interface SerializedNode {
   id: string;
   type: string;
+  nodeType: string;
+  layerType: string;
   transform: {
     position: Vec3;
     rotation: Vec4;
@@ -20,43 +22,20 @@ interface SerializedNode {
     emissiveIntensity?: number;
   };
   parent: string | null;
+  visible: boolean;
 }
 
 interface SerializedScene {
   version: number;
-  primitives: SerializedNode[];
-}
-
-export function serializeScene(sceneGraph: SceneGraph): SerializedScene {
-  const primitives: SerializedNode[] = [];
-
-  sceneGraph.traverse((node: SceneNode) => {
-    primitives.push({
-      id: node.id,
-      type: node.type,
-      transform: {
-        position: [...node.transform.position] as Vec3,
-        rotation: [...node.transform.rotation] as Vec4,
-        scale: [...node.transform.scale] as Vec3,
-      },
-      params: { ...node.params },
-      deformers: node.deformers.map((d) => ({ ...d })),
-      material: { ...node.material },
-      parent:
-        node.parent && node.parent.id !== '__root__' ? node.parent.id : null,
-    });
-  });
-
-  return {
-    version: 1,
-    primitives,
-  };
+  nodes: SerializedNode[];
 }
 
 function serializeNode(node: SceneNode): SerializedNode {
   return {
     id: node.id,
     type: node.type,
+    nodeType: node.nodeType,
+    layerType: node.layerType,
     transform: {
       position: [...node.transform.position] as Vec3,
       rotation: [...node.transform.rotation] as Vec4,
@@ -67,6 +46,20 @@ function serializeNode(node: SceneNode): SerializedNode {
     material: { ...node.material },
     parent:
       node.parent && node.parent.id !== '__root__' ? node.parent.id : null,
+    visible: node.visible,
+  };
+}
+
+export function serializeScene(sceneGraph: SceneGraph): SerializedScene {
+  const nodes: SerializedNode[] = [];
+
+  sceneGraph.traverse((node: SceneNode) => {
+    nodes.push(serializeNode(node));
+  });
+
+  return {
+    version: 1,
+    nodes,
   };
 }
 
@@ -84,33 +77,62 @@ export function deserializeScene(
   commandBus: CommandBus,
   sceneGraph: SceneGraph
 ): void {
-  // Clear existing scene
   sceneGraph.clear();
 
-  // First pass: spawn all nodes
-  for (const prim of json.primitives) {
-    commandBus.exec({
-      cmd: 'spawn',
-      id: prim.id,
-      type: prim.type,
-      position: prim.transform.position,
-      params: prim.params,
-      material: prim.material,
-    });
+  for (const node of json.nodes) {
+    switch (node.nodeType) {
+      case 'light':
+        commandBus.exec({
+          cmd: 'spawn_light',
+          id: node.id,
+          position: node.transform.position,
+        });
+        break;
+      case 'group':
+        commandBus.exec({
+          cmd: 'create_group',
+          id: node.id,
+          position: node.transform.position,
+        });
+        break;
+      case 'animation_player':
+        commandBus.exec({
+          cmd: 'create_animation_player',
+          id: node.id,
+          position: node.transform.position,
+        });
+        break;
+      case 'clay':
+        commandBus.exec({
+          cmd: 'create_clay',
+          id: node.id,
+          position: node.transform.position,
+        });
+        break;
+      default:
+        commandBus.exec({
+          cmd: 'spawn',
+          id: node.id,
+          type: node.type,
+          position: node.transform.position,
+          params: node.params,
+          material: node.material,
+        });
+        break;
+    }
 
-    // Apply full transform (spawn only sets position)
-    const node = sceneGraph.getNode(prim.id);
-    if (node) {
-      node.transform.rotation = [...prim.transform.rotation] as Vec4;
-      node.transform.scale = [...prim.transform.scale] as Vec3;
-      node.deformers = prim.deformers.map((d) => ({ ...d })) as any;
+    const restored = sceneGraph.getNode(node.id);
+    if (restored) {
+      restored.transform.rotation = [...node.transform.rotation] as Vec4;
+      restored.transform.scale = [...node.transform.scale] as Vec3;
+      restored.deformers = node.deformers.map((d) => ({ ...d })) as any;
+      restored.visible = node.visible;
     }
   }
 
-  // Second pass: reparent
-  for (const prim of json.primitives) {
-    if (prim.parent) {
-      sceneGraph.reparent(prim.id, prim.parent);
+  for (const node of json.nodes) {
+    if (node.parent) {
+      sceneGraph.reparent(node.id, node.parent);
     }
   }
 }

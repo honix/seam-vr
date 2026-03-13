@@ -1,28 +1,23 @@
-// Seam VR - Main entry point
-// Bootstrap renderer, scene graph, command bus, and all subsystems
+// Seam VR - Main entry point.
 
 import * as THREE from 'three';
 
-// Core
-import { SceneGraph, SceneNode } from './core/scene-graph';
+import { SceneGraph } from './core/scene-graph';
+import { SceneAnchorManager } from './core/scene-anchor-manager';
 import { CommandBus } from './core/command-bus';
 import { registerAllCommands } from './core/commands';
 import { initTestHarness } from './test-harness/harness';
 
-// Rendering
-import { RenderPipeline } from './rendering/render-pipeline';
 import { setupEnvironment, createGroundGrid } from './rendering/environment';
 import { createOrbitCamera, updateOrbitCamera } from './viewer/orbit-camera';
 import { SelectionOutline } from './rendering/selection-outline';
 import { LightGizmo } from './rendering/light-gizmo';
 
-// XR
 import { XRSessionManager } from './xr/xr-session';
 import { XRControllerTracker } from './xr/xr-controller';
 import { XREmulator } from './xr/xr-emulator';
 import { XRInputHandler } from './xr/xr-input-handler';
 
-// Interaction
 import { InteractionManager } from './interaction/interaction-manager';
 import { ToolSystem } from './interaction/tool-system';
 import { BrushPreview } from './interaction/brush-preview';
@@ -30,19 +25,15 @@ import { WorldNavigation } from './interaction/world-navigation';
 import { LayerGrabSystem } from './interaction/layer-grab-system';
 import { SelectionManager } from './interaction/selection-manager';
 
-// Animation
 import { AnimationSystem } from './animation/animation-system';
 import { TimelineController } from './animation/timeline-controller';
 
-// UI
 import { UIManager } from './ui/ui-manager';
 
-// Sculpting
-import { SculptEngine } from './sculpting/sculpt-engine';
+import { ClayManager } from './sculpting/clay-manager';
 import { SculptInteraction } from './sculpting/sculpt-interaction';
 
 async function init() {
-  // --- Renderer ---
   const container = document.getElementById('canvas-container')!;
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -51,7 +42,6 @@ async function init() {
   renderer.toneMappingExposure = 1.0;
   container.appendChild(renderer.domElement);
 
-  // --- Scene + Camera ---
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1a1a2e);
 
@@ -63,47 +53,30 @@ async function init() {
   );
   camera.position.set(0, 1.6, 3);
 
-  // --- World Group ---
-  // All content (environment, grid, sculpt, primitives) goes into worldGroup.
-  // Controllers and UI remain direct scene children (XR manages their position).
-  // WorldNavigation moves/scales/rotates this group for grip-based navigation.
   const worldGroup = new THREE.Group();
   worldGroup.name = 'world_content';
   scene.add(worldGroup);
 
-  // --- Environment ---
   setupEnvironment(worldGroup);
   createGroundGrid(worldGroup);
 
-  // --- Core Systems ---
   const sceneGraph = new SceneGraph();
   const commandBus = new CommandBus(sceneGraph);
   registerAllCommands(commandBus, sceneGraph);
+  const sceneAnchorManager = new SceneAnchorManager(sceneGraph, worldGroup);
 
-  // --- Render Pipeline ---
-  const renderPipeline = new RenderPipeline(renderer, scene, camera);
-  renderPipeline.setContentParent(worldGroup);
-  renderPipeline.connectCommandBus(commandBus, sceneGraph);
-
-  // --- Orbit Camera (flat-screen fallback) ---
   const orbitControls = createOrbitCamera(camera, renderer.domElement);
 
-  // --- XR Setup ---
   const xrSession = new XRSessionManager(renderer);
   const vrButton = document.getElementById('vr-button') as HTMLButtonElement;
-
-  // Check XR support and show button
   const xrSupported = await xrSession.isSupported();
   if (xrSupported) {
     vrButton.classList.add('visible');
     xrSession.setupVRButton(vrButton);
   }
 
-  // XR controllers (real) + emulator (desktop testing)
   const controllerTracker = new XRControllerTracker(renderer);
   const xrEmulator = new XREmulator();
-
-  // Use real controllers in VR, emulator on desktop
   let useEmulator = !xrSupported;
 
   xrSession.onSessionStart = () => {
@@ -117,86 +90,52 @@ async function init() {
     orbitControls.enabled = true;
   };
 
-  // --- Tool System ---
   const toolSystem = new ToolSystem();
-
-  // --- Sculpting ---
-  const sculptEngine = new SculptEngine(scene);
-  await sculptEngine.initGPU();
-  // Reparent sculpt group from scene into worldGroup so it moves with world navigation
-  scene.remove(sculptEngine.sculptGroup);
-  worldGroup.add(sculptEngine.sculptGroup);
-  const sculptInteraction = new SculptInteraction(sculptEngine);
-
-  // --- Register sculpt volume as scene node ---
-  const sculptNode = new SceneNode('sculpt_volume', 'sphere');
-  sculptNode.nodeType = 'sculpt_volume';
-  sculptNode.layerType = 'sculpt';
-  sculptNode.mesh = null;
-  sceneGraph.addNode(sculptNode);
-
-  // --- Brush Preview ---
+  const clayManager = new ClayManager(sceneGraph, worldGroup);
+  const sculptInteraction = new SculptInteraction(clayManager);
   const brushPreview = new BrushPreview(scene, toolSystem);
 
-  // --- Animation ---
   const animationSystem = new AnimationSystem();
   const timelineController = new TimelineController();
 
-  // --- UI ---
   const uiManager = new UIManager(scene, commandBus, timelineController, toolSystem, sceneGraph, worldGroup);
-  uiManager.setSculptEngine(sculptEngine);
+  uiManager.setCamera(camera);
+  uiManager.setClayManager(clayManager);
   uiManager.radialMenuL.setCamera(camera);
   uiManager.radialMenuR.setCamera(camera);
+  toolSystem.onToolChange = (hand, tool) => {
+    uiManager.handleToolChange(hand, tool);
+  };
 
-  // --- Selection System ---
   const selectionManager = new SelectionManager(sceneGraph, worldGroup);
-  selectionManager.setSculptEngine(sculptEngine);
-
   const selectionOutline = new SelectionOutline();
   const lightGizmo = new LightGizmo();
 
-  // Wire selection changes to inspector, hierarchy, outline, and gizmo
   selectionManager.onChange((nodeId, node) => {
-    // Update inspector
-    uiManager.inspector.setSelectedNode(node ?? null);
+    uiManager.setSelection(nodeId, node);
 
-    // Update hierarchy highlight
-    uiManager.hierarchy.setSelectedNodeId(nodeId);
-
-    // Update selection outline
     selectionOutline.clear();
     lightGizmo.clear();
 
-    if (node) {
-      if (node.nodeType === 'sculpt_volume') {
-        selectionOutline.setTargetGroup(sculptEngine.sculptGroup);
-      } else if (node.mesh) {
-        selectionOutline.setTarget(node);
-      }
+    const targetObject = node?.object3D ?? node?.mesh ?? null;
+    if (targetObject) {
+      selectionOutline.setTargetObject(targetObject);
+    }
 
-      // Show light gizmo for light nodes
-      if (node.layerType === 'light') {
-        lightGizmo.setTarget(node);
-      }
+    if (node?.layerType === 'light') {
+      lightGizmo.setTarget(node);
     }
   });
 
-  // Wire hierarchy row clicks to selection
-  uiManager.hierarchy.onSelect((nodeId) => {
+  uiManager.onHierarchySelect((nodeId) => {
     selectionManager.selectById(nodeId);
   });
 
-  // --- Input Handlers ---
   const inputHandler = new XRInputHandler(xrEmulator);
   const inputHandlerVR = new XRInputHandler(controllerTracker);
-
-  // --- World Navigation ---
   const worldNavigation = new WorldNavigation(worldGroup);
-
-  // --- Layer Grab System ---
   const layerGrabSystem = new LayerGrabSystem(sceneGraph, commandBus);
 
-  // --- Interaction Manager (emulator) ---
   const interactionManager = new InteractionManager(
     xrEmulator,
     inputHandler,
@@ -210,13 +149,11 @@ async function init() {
   interactionManager.setWorldNavigation(worldNavigation);
   interactionManager.setLayerGrabSystem(layerGrabSystem);
   interactionManager.setSelectionManager(selectionManager);
-  interactionManager.setPanels(uiManager.getPanels());
-  interactionManager.setUICallbacks({
-    toggleInspector: (pos, dir) => uiManager.toggleInspector(pos, dir),
-    toggleHierarchy: (pos, dir) => uiManager.toggleHierarchy(pos, dir),
+  interactionManager.setPanelProvider(() => uiManager.getPanels());
+  interactionManager.setUIPanelActions({
+    detachPanel: (panel) => uiManager.detachPanel(panel),
   });
 
-  // --- Interaction Manager (VR) ---
   const interactionManagerVR = new InteractionManager(
     controllerTracker,
     inputHandlerVR,
@@ -230,25 +167,21 @@ async function init() {
   interactionManagerVR.setWorldNavigation(worldNavigation);
   interactionManagerVR.setLayerGrabSystem(layerGrabSystem);
   interactionManagerVR.setSelectionManager(selectionManager);
-  interactionManagerVR.setPanels(uiManager.getPanels());
-  interactionManagerVR.setUICallbacks({
-    toggleInspector: (pos, dir) => uiManager.toggleInspector(pos, dir),
-    toggleHierarchy: (pos, dir) => uiManager.toggleHierarchy(pos, dir),
+  interactionManagerVR.setPanelProvider(() => uiManager.getPanels());
+  interactionManagerVR.setUIPanelActions({
+    detachPanel: (panel) => uiManager.detachPanel(panel),
   });
 
-  // --- Test Harness ---
   initTestHarness(commandBus, sceneGraph);
-  window.__seam.sculptEngine = sculptEngine;
   window.__seam.toolSystem = toolSystem;
   window.__seam.camera = camera;
+  (window.__seam as any).clayManager = clayManager;
   (window.__seam as any)._setUI(uiManager);
   (window.__seam as any)._setSelection(selectionManager);
   (window.__seam as any)._setOrbitControls(orbitControls);
 
-  // Wire emulator commands through the test harness
   const origExec = commandBus.exec.bind(commandBus);
   commandBus.exec = (cmd) => {
-    // Route XR emulation commands to emulator
     if (cmd.cmd.startsWith('xr_')) {
       xrEmulator.handleCommand(cmd);
       return;
@@ -256,57 +189,84 @@ async function init() {
     origExec(cmd);
   };
 
-  // --- Resize Handler ---
-  window.addEventListener('resize', () => {
+  commandBus.exec({
+    cmd: 'create_clay',
+    id: 'clay_1',
+    position: [0, 1.2, 0],
+  });
+  sceneAnchorManager.syncAll();
+  await clayManager.syncAll();
+  selectionManager.selectById('clay_1');
+
+  const handleResize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-  });
+  };
+  window.addEventListener('resize', handleResize);
 
-  // --- Clock for deltaTime ---
   const clock = new THREE.Clock();
-
-  // --- Frame timing ---
   let frameCount = 0;
   let frameTotalMs = 0;
+  let disposed = false;
+  const hot = (import.meta as ImportMeta & {
+    hot?: { dispose(callback: () => void): void };
+  }).hot;
 
-  // --- Render Loop ---
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+
+    renderer.setAnimationLoop(null);
+    window.removeEventListener('resize', handleResize);
+    window.removeEventListener('pagehide', dispose);
+
+    uiManager.dispose();
+    lightGizmo.dispose();
+    selectionOutline.dispose();
+    brushPreview.dispose();
+    clayManager.dispose();
+
+    renderer.dispose();
+    renderer.forceContextLoss?.();
+    renderer.domElement.remove();
+  };
+  window.addEventListener('pagehide', dispose, { once: true });
+  if (hot) {
+    hot.dispose(dispose);
+  }
+
   renderer.setAnimationLoop(() => {
+    if (disposed) return;
     const frameStart = performance.now();
     const deltaTime = clock.getDelta();
 
-    // Update animation
     const time = timelineController.update(deltaTime);
     if (timelineController.state === 'playing') {
       animationSystem.evaluate(time, sceneGraph);
     }
 
-    // Update input and interaction (unified - no mode branching)
     if (useEmulator) {
       xrEmulator.update();
+      uiManager.updateHandAnchors(xrEmulator.left, xrEmulator.right);
       interactionManager.update();
     } else if (xrSession.isInVR()) {
       controllerTracker.update();
+      uiManager.updateHandAnchors(controllerTracker.left, controllerTracker.right);
       interactionManagerVR.update();
     }
 
-    // Update orbit camera (only when not in VR)
     if (!xrSession.isInVR()) {
       updateOrbitCamera(orbitControls);
     }
 
-    // Update UI
     uiManager.update();
-
-    // Update selection outline (box helper needs per-frame update)
     selectionOutline.update();
 
-    // Render
     const renderStart = performance.now();
     renderer.render(scene, camera);
     const renderMs = performance.now() - renderStart;
 
-    // Log frame timing every 120 frames (~2 seconds)
     const frameMs = performance.now() - frameStart;
     frameTotalMs += frameMs;
     frameCount++;
@@ -324,7 +284,6 @@ async function init() {
   });
 
   console.log('[Seam VR] Fully initialized');
-  console.log('[Seam VR] Test harness: window.__seam.exec({cmd:"spawn", type:"cylinder", id:"test1", position:[0,1,0]})');
 }
 
 init().catch(console.error);

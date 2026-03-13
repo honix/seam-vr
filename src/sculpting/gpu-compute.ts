@@ -19,9 +19,9 @@ interface ChunkGPUData {
 }
 
 // Max chunks per GPU round (pool slots). Overflow handled by multi-round.
-// Sized for: 8 brush chunks + 12 remesh chunks (8 modified + 4 boundary neighbors).
-// Memory: 12 × ~5MB = ~60MB total (vertex buffers are 2.3MB each, not 11.8MB).
-const MAX_BATCH = 12;
+// Keep this modest because each clay node owns a full pool and browser refreshes
+// can lag in reclaiming GPU memory.
+const MAX_BATCH = 6;
 
 // Realistic max vertices per chunk. Theoretical max is cs^3*15 (491K),
 // but real sculpt surfaces rarely exceed 30% cell fill = ~100K vertices.
@@ -205,7 +205,7 @@ export class GPUCompute {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       }));
 
-      // Vertex output (11.8MB each)
+      // Vertex output (~2.4MB each with current MAX_VERTICES_PER_CHUNK)
       this.vertexBuffers.push(this.device.createBuffer({
         size: this.vertexBufferSize,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,

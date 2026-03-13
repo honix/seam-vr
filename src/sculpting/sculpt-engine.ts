@@ -51,6 +51,7 @@ export class SculptEngine {
   // Per-hand previous stroke position for capsule brush continuity
   private _prevStrokePos: Map<string, [number, number, number] | null> = new Map();
   private pendingStrokes: Map<string, PendingStroke> = new Map();
+  private pendingStrokeResets: Set<string> = new Set();
   private activeStrokeHands: Set<string> = new Set();
   private pendingRemeshChunkKeys: Map<string, number> = new Map();
   private lastRemeshAt = 0;
@@ -215,6 +216,7 @@ export class SculptEngine {
       }
     } finally {
       this.strokeInFlight = false;
+      this.finalizeEndedHandIfSettled(pending.hand);
       const next = this.takePendingStroke();
       if (next) {
         void this.processStroke(next);
@@ -229,8 +231,12 @@ export class SculptEngine {
    */
   endStroke(hand: string = 'right'): void {
     this.activeStrokeHands.delete(hand);
-    this._prevStrokePos.set(hand, null);
-    this.pendingStrokes.delete(hand);
+    if (this.strokeInFlight || this.pendingStrokes.has(hand)) {
+      this.pendingStrokeResets.add(hand);
+    } else {
+      this._prevStrokePos.set(hand, null);
+      this.pendingStrokeResets.delete(hand);
+    }
     if (!this.strokeInFlight && this.activeStrokeHands.size === 0 && this.pendingRemeshChunkKeys.size > 0) {
       void this.flushPendingRemesh();
     }
@@ -371,6 +377,15 @@ export class SculptEngine {
     return next;
   }
 
+  private finalizeEndedHandIfSettled(hand: string): void {
+    if (!this.pendingStrokeResets.has(hand)) return;
+    if (this.activeStrokeHands.has(hand)) return;
+    if (this.pendingStrokes.has(hand)) return;
+
+    this._prevStrokePos.set(hand, null);
+    this.pendingStrokeResets.delete(hand);
+  }
+
   private createStrokeSteps(
     from: [number, number, number],
     to: [number, number, number],
@@ -507,6 +522,7 @@ export class SculptEngine {
   dispose(): void {
     this.activeStrokeHands.clear();
     this.pendingStrokes.clear();
+    this.pendingStrokeResets.clear();
     this.pendingRemeshChunkKeys.clear();
     for (const [, chunkMesh] of this.chunkMeshes) {
       this.sculptGroup.remove(chunkMesh.mesh);

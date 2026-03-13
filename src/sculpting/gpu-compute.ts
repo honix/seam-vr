@@ -4,7 +4,7 @@
 //   Fence 2: buildPadded + marchingCubes + vertex readbacks (fixed-size)
 
 import type { Chunk } from './chunk';
-import type { BrushParams, SculptConfig, MeshData } from './types';
+import type { BrushParams, ChunkCoord, SculptConfig, MeshData } from './types';
 import { EDGE_TABLE, TRI_TABLE } from './marching-tables';
 
 import sdfBrushShader from '../shaders/sdf-brush.compute.wgsl?raw';
@@ -16,6 +16,7 @@ interface ChunkGPUData {
   sdfBuffer: GPUBuffer;
   initialized: boolean;
   cpuDirty: boolean;
+  gpuDirty: boolean;
 }
 
 // Max chunks per GPU round (pool slots). Overflow handled by multi-round.
@@ -241,7 +242,7 @@ export class GPUCompute {
         size: chunk.data.byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
       });
-      gpuData = { sdfBuffer: buffer, initialized: false, cpuDirty: false };
+      gpuData = { sdfBuffer: buffer, initialized: false, cpuDirty: false, gpuDirty: false };
       this.chunkBuffers.set(key, gpuData);
     }
     return gpuData;
@@ -259,6 +260,7 @@ export class GPUCompute {
       );
       gpuData.initialized = true;
       gpuData.cpuDirty = false;
+      gpuData.gpuDirty = false;
     }
     return gpuData;
   }
@@ -283,11 +285,7 @@ export class GPUCompute {
       for (let i = 0; i < n; i++) {
         const chunk = chunks[offset + i];
         const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
-        const gpuData = this.getChunkBuffer(chunk, key);
-
-        this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
-        gpuData.initialized = true;
-        gpuData.cpuDirty = false;
+        const gpuData = this.ensureChunkUploaded(chunk, key);
 
         // Pack uniform struct matching WGSL BrushUniforms layout (80 bytes):
         //  0: center (vec3<f32>) + radius (f32)        = 16 bytes
@@ -323,20 +321,10 @@ export class GPUCompute {
         pass.setBindGroup(0, bindGroup);
         pass.dispatchWorkgroups(workgroupsX, workgroupsY, workgroupsZ);
         pass.end();
-
-        encoder.copyBufferToBuffer(gpuData.sdfBuffer, 0, this.sdfReadbackBuffers[i], 0, this.sdfSize);
+        gpuData.gpuDirty = true;
       }
 
       this.device.queue.submit([encoder.finish()]);
-      await Promise.all(
-        Array.from({ length: n }, (_, i) => this.sdfReadbackBuffers[i].mapAsync(GPUMapMode.READ))
-      );
-
-      for (let i = 0; i < n; i++) {
-        const result = new Float32Array(this.sdfReadbackBuffers[i].getMappedRange());
-        chunks[offset + i].data.set(result);
-        this.sdfReadbackBuffers[i].unmap();
-      }
     }
   }
 
@@ -379,16 +367,7 @@ export class GPUCompute {
       const existing = sourceBuffers.get(key);
       if (existing) return existing;
 
-      const gpuData = this.getChunkBuffer(chunk, key);
-      this.device!.queue.writeBuffer(
-        gpuData.sdfBuffer,
-        0,
-        chunk.data.buffer,
-        chunk.data.byteOffset,
-        chunk.data.byteLength
-      );
-      gpuData.initialized = true;
-      gpuData.cpuDirty = false;
+      const gpuData = this.ensureChunkUploaded(chunk, key);
       sourceBuffers.set(key, gpuData.sdfBuffer);
       return gpuData.sdfBuffer;
     };
@@ -495,20 +474,171 @@ export class GPUCompute {
       smoothPass.end();
 
       for (let i = 0; i < n; i++) {
-        encoder.copyBufferToBuffer(this.smoothOutputBuffers[i], 0, this.sdfReadbackBuffers[i], 0, this.sdfSize);
+        const chunk = items[offset + i].chunk;
+        const gpuData = this.getChunkBuffer(chunk, `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`);
+        encoder.copyBufferToBuffer(this.smoothOutputBuffers[i], 0, gpuData.sdfBuffer, 0, this.sdfSize);
+        gpuData.gpuDirty = true;
+      }
+
+      this.device.queue.submit([encoder.finish()]);
+    }
+  }
+
+  async syncBoundaryFaces(
+    modifiedChunks: Chunk[],
+    getChunk: (coord: ChunkCoord) => Chunk | undefined,
+  ): Promise<Chunk[]> {
+    if (!this.device || modifiedChunks.length === 0) return [];
+
+    const samples = this.config.chunkSize + 1;
+    const sampleBytes = 4;
+    const planeBytes = samples * sampleBytes;
+    const slabBytes = samples * samples * sampleBytes;
+    const modifiedKeys = new Set(modifiedChunks.map((chunk) => `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`));
+    const extraChunks: Chunk[] = [];
+    const seen = new Set<string>();
+    const encoder = this.device.createCommandEncoder();
+    let copyCount = 0;
+
+    const queueRemesh = (chunk: Chunk, key: string) => {
+      chunk.dirty = true;
+      if (!modifiedKeys.has(key) && !seen.has(key)) {
+        extraChunks.push(chunk);
+      }
+      seen.add(key);
+    };
+
+    const copyFace = (
+      source: Chunk,
+      target: Chunk,
+      axis: 'x' | 'y' | 'z',
+      sourceIndex: number,
+      targetIndex: number,
+    ) => {
+      const sourceKey = `${source.coord.x},${source.coord.y},${source.coord.z}`;
+      const targetKey = `${target.coord.x},${target.coord.y},${target.coord.z}`;
+      const sourceBuffer = this.ensureChunkUploaded(source, sourceKey).sdfBuffer;
+      const targetData = this.ensureChunkUploaded(target, targetKey);
+
+      if (axis === 'x') {
+        for (let iz = 0; iz < samples; iz++) {
+          for (let iy = 0; iy < samples; iy++) {
+            const sourceOffset = ((iz * samples * samples) + (iy * samples) + sourceIndex) * sampleBytes;
+            const targetOffset = ((iz * samples * samples) + (iy * samples) + targetIndex) * sampleBytes;
+            encoder.copyBufferToBuffer(sourceBuffer, sourceOffset, targetData.sdfBuffer, targetOffset, sampleBytes);
+            copyCount += 1;
+          }
+        }
+      } else if (axis === 'y') {
+        for (let iz = 0; iz < samples; iz++) {
+          const sourceOffset = ((iz * samples * samples) + (sourceIndex * samples)) * sampleBytes;
+          const targetOffset = ((iz * samples * samples) + (targetIndex * samples)) * sampleBytes;
+          encoder.copyBufferToBuffer(sourceBuffer, sourceOffset, targetData.sdfBuffer, targetOffset, planeBytes);
+          copyCount += 1;
+        }
+      } else {
+        const sourceOffset = sourceIndex * slabBytes;
+        const targetOffset = targetIndex * slabBytes;
+        encoder.copyBufferToBuffer(sourceBuffer, sourceOffset, targetData.sdfBuffer, targetOffset, slabBytes);
+        copyCount += 1;
+      }
+
+      targetData.gpuDirty = true;
+    };
+
+    for (const chunk of modifiedChunks) {
+      const { x, y, z } = chunk.coord;
+
+      const nxpKey = `${x + 1},${y},${z}`;
+      const nxp = getChunk({ x: x + 1, y, z });
+      if (nxp) {
+        copyFace(chunk, nxp, 'x', this.config.chunkSize, 0);
+        queueRemesh(nxp, nxpKey);
+      }
+
+      const nypKey = `${x},${y + 1},${z}`;
+      const nyp = getChunk({ x, y: y + 1, z });
+      if (nyp) {
+        copyFace(chunk, nyp, 'y', this.config.chunkSize, 0);
+        queueRemesh(nyp, nypKey);
+      }
+
+      const nzpKey = `${x},${y},${z + 1}`;
+      const nzp = getChunk({ x, y, z: z + 1 });
+      if (nzp) {
+        copyFace(chunk, nzp, 'z', this.config.chunkSize, 0);
+        queueRemesh(nzp, nzpKey);
+      }
+
+      const nxmKey = `${x - 1},${y},${z}`;
+      if (!modifiedKeys.has(nxmKey)) {
+        const nxm = getChunk({ x: x - 1, y, z });
+        if (nxm) {
+          copyFace(chunk, nxm, 'x', 0, this.config.chunkSize);
+          queueRemesh(nxm, nxmKey);
+        }
+      }
+
+      const nymKey = `${x},${y - 1},${z}`;
+      if (!modifiedKeys.has(nymKey)) {
+        const nym = getChunk({ x, y: y - 1, z });
+        if (nym) {
+          copyFace(chunk, nym, 'y', 0, this.config.chunkSize);
+          queueRemesh(nym, nymKey);
+        }
+      }
+
+      const nzmKey = `${x},${y},${z - 1}`;
+      if (!modifiedKeys.has(nzmKey)) {
+        const nzm = getChunk({ x, y, z: z - 1 });
+        if (nzm) {
+          copyFace(chunk, nzm, 'z', 0, this.config.chunkSize);
+          queueRemesh(nzm, nzmKey);
+        }
+      }
+    }
+
+    if (copyCount > 0) {
+      this.device.queue.submit([encoder.finish()]);
+    }
+
+    return extraChunks;
+  }
+
+  async syncChunksToCPU(chunks: Chunk[]): Promise<void> {
+    if (!this.device || chunks.length === 0) return;
+
+    for (let offset = 0; offset < chunks.length; offset += MAX_BATCH) {
+      const batch = chunks.slice(offset, offset + MAX_BATCH);
+      const encoder = this.device.createCommandEncoder();
+      const synced: Array<{ chunk: Chunk; gpuData: ChunkGPUData; readbackIndex: number }> = [];
+
+      for (let i = 0; i < batch.length; i++) {
+        const chunk = batch[i];
+        const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
+        const gpuData = this.chunkBuffers.get(key);
+        if (!gpuData || !gpuData.initialized || !gpuData.gpuDirty) {
+          continue;
+        }
+
+        encoder.copyBufferToBuffer(gpuData.sdfBuffer, 0, this.sdfReadbackBuffers[synced.length], 0, this.sdfSize);
+        synced.push({ chunk, gpuData, readbackIndex: synced.length });
+      }
+
+      if (synced.length === 0) {
+        continue;
       }
 
       this.device.queue.submit([encoder.finish()]);
       await Promise.all(
-        Array.from({ length: n }, (_, i) => this.sdfReadbackBuffers[i].mapAsync(GPUMapMode.READ))
+        synced.map(({ readbackIndex }) => this.sdfReadbackBuffers[readbackIndex].mapAsync(GPUMapMode.READ)),
       );
 
-      for (let i = 0; i < n; i++) {
-        const result = new Float32Array(this.sdfReadbackBuffers[i].getMappedRange());
-        const chunk = items[offset + i].chunk;
+      for (const { chunk, gpuData, readbackIndex } of synced) {
+        const result = new Float32Array(this.sdfReadbackBuffers[readbackIndex].getMappedRange());
         chunk.data.set(result);
-        this.sdfReadbackBuffers[i].unmap();
-        this.getChunkBuffer(chunk, `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`).cpuDirty = true;
+        this.sdfReadbackBuffers[readbackIndex].unmap();
+        gpuData.gpuDirty = false;
       }
     }
   }
@@ -685,6 +815,7 @@ export class GPUCompute {
     const gpuData = this.chunkBuffers.get(key);
     if (gpuData) {
       gpuData.cpuDirty = true;
+      gpuData.gpuDirty = false;
     }
   }
 

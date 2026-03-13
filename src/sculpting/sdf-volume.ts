@@ -68,6 +68,10 @@ export class SDFVolume {
     return this.chunks.size;
   }
 
+  getAllChunks(): Chunk[] {
+    return [...this.chunks.values()];
+  }
+
   /**
    * Sync shared boundary samples between modified chunks and their neighbors.
    * The lower-coordinate chunk owns the shared boundary plane.

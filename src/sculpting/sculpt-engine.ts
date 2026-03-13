@@ -73,6 +73,7 @@ export class SculptEngine {
     // Group to hold all chunk meshes
     this.sculptGroup = new THREE.Group();
     this.sculptGroup.name = groupName;
+    this.sculptGroup.frustumCulled = false;
     this.parent.add(this.sculptGroup);
   }
 
@@ -234,10 +235,7 @@ export class SculptEngine {
       }
 
       const t3 = performance.now();
-      const remeshCount = await this.remeshModifiedChunks(
-        [...modifiedChunks.values()],
-        pending.mode === 'smooth',
-      );
+      const remeshCount = await this.remeshModifiedChunks([...modifiedChunks.values()]);
 
       const t4 = performance.now();
 
@@ -272,18 +270,17 @@ export class SculptEngine {
     }
   }
 
-  private async remeshModifiedChunks(modifiedChunks: Chunk[], forceUploadModified = false): Promise<number> {
-    const extraChunks = this.volume.syncBoundaries(modifiedChunks);
+  private async remeshModifiedChunks(modifiedChunks: Chunk[], uploadCpuModified = false): Promise<number> {
+    const extraChunks = await this.gpu.syncBoundaryFaces(
+      modifiedChunks,
+      (coord) => this.volume.getChunk(coord),
+    );
     const remeshChunks = [...modifiedChunks, ...extraChunks];
 
-    if (forceUploadModified) {
+    if (uploadCpuModified) {
       for (const chunk of modifiedChunks) {
         this.gpu.invalidateChunk(chunkKey(chunk.coord));
       }
-    }
-    for (const chunk of extraChunks) {
-      const key = chunkKey(chunk.coord);
-      this.gpu.invalidateChunk(key);
     }
     if (remeshChunks.length === 0) return 0;
 
@@ -452,6 +449,7 @@ export class SculptEngine {
       const geometry = new THREE.BufferGeometry();
       const mesh = new THREE.Mesh(geometry, this.sculptMaterial);
       mesh.name = `sculpt_chunk_${key}`;
+      mesh.frustumCulled = false;
       this.sculptGroup.add(mesh);
       chunkMesh = { mesh, vertexCount: 0 };
       this.chunkMeshes.set(key, chunkMesh);
@@ -475,7 +473,6 @@ export class SculptEngine {
       chunkMesh.mesh.geometry.dispose();
       this.chunkMeshes.delete(key);
     }
-    this.gpu.releaseChunk(key);
   }
 
   /**
@@ -499,12 +496,16 @@ export class SculptEngine {
     this.sculptMaterial.metalness = material.metallic;
   }
 
-  async waitForIdle(): Promise<void> {
+  async waitForIdle(options?: { syncCpu?: boolean; chunks?: Chunk[] }): Promise<void> {
     while (
       this.strokeInFlight ||
       this.pendingStrokes.size > 0
     ) {
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    }
+
+    if (options?.syncCpu) {
+      await this.gpu.syncChunksToCPU(options.chunks ?? this.volume.getAllChunks());
     }
   }
 

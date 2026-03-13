@@ -18,6 +18,8 @@ vi.mock('../../src/sculpting/gpu-compute', () => ({
     ready = true;
     applyBrushBatch = vi.fn(async () => {});
     applySmoothBatch = vi.fn(async () => {});
+    syncBoundaryFaces = vi.fn(async (_chunks: unknown[]) => []);
+    syncChunksToCPU = vi.fn(async () => {});
     buildPaddedAndExtractBatch = vi.fn(async (items: unknown[]) => items.map(() => ({ vertexCount: 0 })));
     invalidateChunk = vi.fn();
     releaseChunk = vi.fn();
@@ -55,6 +57,7 @@ describe('SculptEngine', () => {
     await engine.stroke([0, 0, 0], 'right');
 
     expect(gpu.applyBrushBatch).toHaveBeenCalledTimes(1);
+    expect(gpu.syncBoundaryFaces).toHaveBeenCalledTimes(1);
     expect(gpu.buildPaddedAndExtractBatch.mock.calls.length).toBeGreaterThan(1);
     for (const [items] of gpu.buildPaddedAndExtractBatch.mock.calls) {
       expect((items as unknown[]).length).toBeLessThanOrEqual(6);
@@ -114,8 +117,24 @@ describe('SculptEngine', () => {
     await engine.stroke([0.01, 0, 0], 'right');
 
     expect(gpu.applyBrushBatch).toHaveBeenCalledTimes(1);
+    expect(gpu.syncBoundaryFaces).toHaveBeenCalledTimes(1);
     expect(gpu.buildPaddedAndExtractBatch.mock.calls.length).toBeGreaterThan(0);
     expect(engine.getStats().vertices).toBeGreaterThan(0);
+    engine.dispose();
+  });
+
+  it('only syncs chunk data back to CPU when explicitly requested', async () => {
+    gpuInstances.length = 0;
+    const engine = new SculptEngine(new THREE.Group());
+    const gpu = gpuInstances[0];
+
+    await engine.stroke([0, 0, 0], 'right');
+    await engine.stroke([0.01, 0, 0], 'right');
+    await engine.waitForIdle();
+    expect(gpu.syncChunksToCPU).not.toHaveBeenCalled();
+
+    await engine.waitForIdle({ syncCpu: true });
+    expect(gpu.syncChunksToCPU).toHaveBeenCalledTimes(1);
     engine.dispose();
   });
 });

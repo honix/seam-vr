@@ -141,6 +141,26 @@ export class UIManager {
     this.detachedPanels = this.detachedPanels.filter((panel) => panel.isOpen);
   }
 
+  resetForHarness(): void {
+    this.radialMenuL.close();
+    this.radialMenuR.close();
+
+    for (const hand of ['left', 'right'] as const) {
+      this.closeLivePanel(hand);
+    }
+
+    for (const panel of this.detachedPanels) {
+      panel.close();
+      panel.dispose();
+    }
+
+    this.detachedPanels = [];
+    this.selectedNode = null;
+    this.selectedNodeId = null;
+    this.lastHandAnchor = { left: null, right: null };
+    this.windowController = new WindowToolController();
+  }
+
   dispose(): void {
     for (const hand of ['left', 'right'] as const) {
       this.closeLivePanel(hand);

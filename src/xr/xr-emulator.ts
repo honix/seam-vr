@@ -87,9 +87,6 @@ export class XREmulator {
       value: pressed ? 1 : 0,
     };
     (state[buttonKey] as XRButtonState) = button;
-
-    // Compute edge detection immediately
-    this.computeEdges(cmd.hand);
   }
 
   private handleGrabDrag(cmd: Command): void {
@@ -97,7 +94,6 @@ export class XREmulator {
     const state = this.getState(cmd.hand);
     state.position = [...cmd.from] as Vec3;
     state.grip = { pressed: true, touched: true, value: 1 };
-    this.computeEdges(cmd.hand);
 
     // After this, caller should update position in steps and then release
     // For synchronous use, we just set the final state
@@ -125,6 +121,13 @@ export class XREmulator {
   update(): void {
     this.computeEdges('left');
     this.computeEdges('right');
+  }
+
+  reset(): void {
+    this.leftController = createDefaultState();
+    this.rightController = createDefaultState();
+    this.prevLeft = { trigger: false, grip: false, buttonA: false, buttonB: false };
+    this.prevRight = { trigger: false, grip: false, buttonA: false, buttonB: false };
   }
 
   private computeEdges(hand: 'left' | 'right'): void {

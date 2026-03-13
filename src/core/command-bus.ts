@@ -90,6 +90,11 @@ export class CommandBus {
     this.listeners.get(event)!.push(handler);
   }
 
+  clearHistory(): void {
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+  }
+
   private emit(event: BusEventType, data: any): void {
     const handlers = this.listeners.get(event);
     if (handlers) {

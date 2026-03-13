@@ -115,6 +115,50 @@ export class SculptEngine {
   set brushSmoothing(s: number) { this._brushSmoothing = Math.max(0, s); }
 
   /**
+   * Seed a deterministic clay sphere directly into the SDF volume.
+   * Useful for harness baselines where we want visible clay before any interaction.
+   */
+  async seedSphere(center: [number, number, number], radius: number): Promise<void> {
+    const safeRadius = Math.max(this.config.voxelSize, radius);
+    const modifiedChunks = this.volume
+      .chunksInSphere(center[0], center[1], center[2], safeRadius)
+      .map((coord) => this.volume.getOrCreateChunk(coord));
+
+    const voxelSize = this.config.voxelSize;
+    const chunkWorldSize = this.config.chunkSize * voxelSize;
+
+    for (const chunk of modifiedChunks) {
+      const chunkOriginX = chunk.coord.x * chunkWorldSize;
+      const chunkOriginY = chunk.coord.y * chunkWorldSize;
+      const chunkOriginZ = chunk.coord.z * chunkWorldSize;
+
+      for (let iz = 0; iz < chunk.samples; iz++) {
+        for (let iy = 0; iy < chunk.samples; iy++) {
+          for (let ix = 0; ix < chunk.samples; ix++) {
+            const sampleX = chunkOriginX + ix * voxelSize;
+            const sampleY = chunkOriginY + iy * voxelSize;
+            const sampleZ = chunkOriginZ + iz * voxelSize;
+            const seededSdf =
+              Math.hypot(
+                sampleX - center[0],
+                sampleY - center[1],
+                sampleZ - center[2],
+              ) - safeRadius;
+            if (seededSdf < chunk.get(ix, iy, iz)) {
+              chunk.set(ix, iy, iz, seededSdf);
+            }
+          }
+        }
+      }
+      chunk.dirty = true;
+    }
+
+    this.queueChunksForRemesh(modifiedChunks);
+    await this.flushPendingRemesh();
+    await this.waitForIdle();
+  }
+
+  /**
    * Apply a sculpt stroke at the given world position.
    * Keeps boundary neighbors in sync and rebuilds all affected meshes immediately.
    */
@@ -514,6 +558,17 @@ export class SculptEngine {
     this.sculptMaterial.color.setRGB(material.color[0], material.color[1], material.color[2]);
     this.sculptMaterial.roughness = material.roughness;
     this.sculptMaterial.metalness = material.metallic;
+  }
+
+  async waitForIdle(): Promise<void> {
+    while (
+      this.strokeInFlight ||
+      this.remeshFlushInFlight ||
+      this.pendingStrokes.size > 0 ||
+      this.pendingRemeshChunkKeys.size > 0
+    ) {
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    }
   }
 
   /**

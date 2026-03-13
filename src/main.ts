@@ -6,7 +6,7 @@ import { SceneGraph } from './core/scene-graph';
 import { SceneAnchorManager } from './core/scene-anchor-manager';
 import { CommandBus } from './core/command-bus';
 import { registerAllCommands } from './core/commands';
-import { initTestHarness } from './test-harness/harness';
+import { initTestHarness, seedDefaultHarnessScene } from './test-harness/harness';
 
 import { setupEnvironment, createGroundGrid } from './rendering/environment';
 import { createOrbitCamera, updateOrbitCamera } from './viewer/orbit-camera';
@@ -77,7 +77,8 @@ async function init() {
 
   const controllerTracker = new XRControllerTracker(renderer);
   const xrEmulator = new XREmulator();
-  let useEmulator = !xrSupported;
+  // Keep desktop/browser interaction on the emulator unless an actual VR session is active.
+  let useEmulator = true;
 
   xrSession.onSessionStart = () => {
     useEmulator = false;
@@ -172,13 +173,20 @@ async function init() {
     detachPanel: (panel) => uiManager.detachPanel(panel),
   });
 
-  initTestHarness(commandBus, sceneGraph);
-  window.__seam.toolSystem = toolSystem;
-  window.__seam.camera = camera;
-  (window.__seam as any).clayManager = clayManager;
+  const harness = initTestHarness({
+    commandBus,
+    sceneGraph,
+    toolSystem,
+    camera,
+    renderer,
+    xrEmulator,
+    timelineController,
+    animationSystem,
+  });
   (window.__seam as any)._setUI(uiManager);
   (window.__seam as any)._setSelection(selectionManager);
   (window.__seam as any)._setOrbitControls(orbitControls);
+  (window.__seam as any)._setClayManager(clayManager);
 
   const origExec = commandBus.exec.bind(commandBus);
   commandBus.exec = (cmd) => {
@@ -189,14 +197,8 @@ async function init() {
     origExec(cmd);
   };
 
-  commandBus.exec({
-    cmd: 'create_clay',
-    id: 'clay_1',
-    position: [0, 1.2, 0],
-  });
   sceneAnchorManager.syncAll();
-  await clayManager.syncAll();
-  selectionManager.selectById('clay_1');
+  await seedDefaultHarnessScene(commandBus, clayManager, selectionManager);
 
   const handleResize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -270,6 +272,14 @@ async function init() {
     const frameMs = performance.now() - frameStart;
     frameTotalMs += frameMs;
     frameCount++;
+    harness.onFrame({
+      frameMs,
+      renderMs,
+      drawCalls: renderer.info.render.calls,
+      triangles: renderer.info.render.triangles,
+      geometries: renderer.info.memory.geometries,
+      textures: renderer.info.memory.textures,
+    });
     if (frameCount >= 120) {
       const avg = frameTotalMs / frameCount;
       const info = renderer.info;
@@ -283,6 +293,7 @@ async function init() {
     }
   });
 
+  void harness.autoRunFromUrl();
   console.log('[Seam VR] Fully initialized');
 }
 

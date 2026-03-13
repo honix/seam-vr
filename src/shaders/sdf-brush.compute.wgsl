@@ -44,7 +44,7 @@ fn capsule_sdf(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, radius: f32) -> f32 {
   return length(ap - ab * t) - radius;
 }
 
-@compute @workgroup_size(4, 4, 4)
+@compute @workgroup_size(8, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let ix = global_id.x;
   let iy = global_id.y;

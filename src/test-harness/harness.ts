@@ -249,6 +249,9 @@ export function initTestHarness(options: TestHarnessOptions): TestHarnessControl
       snapshotScene() {
         return serializeScene(sceneGraph);
       },
+      clayStats(nodeId?: string) {
+        return getClayStats(nodeId);
+      },
       captureViewport() {
         return renderer.domElement.toDataURL('image/png');
       },

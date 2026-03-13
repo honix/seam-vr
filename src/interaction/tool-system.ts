@@ -70,8 +70,8 @@ export class ToolSystem {
   rightTool: ToolId = 'select';
   onToolChange: ToolChangeCallback | null = null;
 
-  leftBrushRadius = 0.02;
-  rightBrushRadius = 0.02;
+  leftBrushRadius = 0.028;
+  rightBrushRadius = 0.028;
 
   private selectedNodeType: NodeType | null = null;
 

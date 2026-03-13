@@ -15,4 +15,12 @@ export default defineConfig(({ mode }) => ({
   build: {
     target: 'esnext',
   },
+  test: {
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/.{idea,git,cache,output,temp}/**',
+      '**/artifacts/**',
+    ],
+  },
 }));

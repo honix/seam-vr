@@ -17,9 +17,6 @@ interface ChunkMeshData {
 
 const MAX_AFFECTED_CHUNKS_PER_STROKE = 128;
 const REMESH_BATCH_SIZE = 6;
-const LIVE_REMESH_INTERVAL_MS = 32;
-const LIVE_REMESH_CHUNK_BUDGET = 12;
-const FLUSH_REMESH_CHUNK_BUDGET = 48;
 const ENABLE_SCULPT_TIMING_LOGS = false;
 
 interface PendingStroke {
@@ -45,20 +42,16 @@ export class SculptEngine {
 
   // Brush state
   private _brushType: BrushType = 'add';
-  private _brushRadius: number = 0.02; // 2cm default
-  private _brushStrength: number = 1.0;
-  private _brushSmoothing: number = 0.005;
+  private _brushRadius: number = 0.028;
+  private _brushStrength: number = 0.9;
+  private _brushSmoothing: number = 0.0075;
   // Per-hand previous stroke position for capsule brush continuity
   private _prevStrokePos: Map<string, [number, number, number] | null> = new Map();
   private pendingStrokes: Map<string, PendingStroke> = new Map();
   private pendingStrokeResets: Set<string> = new Set();
   private activeStrokeHands: Set<string> = new Set();
-  private pendingRemeshChunkKeys: Map<string, number> = new Map();
-  private lastRemeshAt = 0;
-  private remeshFlushInFlight = false;
-  private remeshPriorityCounter = 0;
 
-  // Concurrent stroke guard — drop frames while GPU is busy
+  // Concurrent stroke guard — coalesce to the latest sample while GPU is busy.
   private strokeInFlight = false;
 
   // Sculpt group in scene
@@ -153,8 +146,7 @@ export class SculptEngine {
       chunk.dirty = true;
     }
 
-    this.queueChunksForRemesh(modifiedChunks);
-    await this.flushPendingRemesh();
+    await this.remeshModifiedChunks(modifiedChunks, true);
     await this.waitForIdle();
   }
 
@@ -165,7 +157,7 @@ export class SculptEngine {
   async stroke(worldPos: [number, number, number], hand: string = 'right'): Promise<void> {
     this.activeStrokeHands.add(hand);
     const pending = this.capturePendingStroke('stroke', worldPos, hand);
-    if (this.strokeInFlight || this.remeshFlushInFlight) {
+    if (this.strokeInFlight) {
       this.pendingStrokes.set(hand, pending);
       return;
     }
@@ -181,7 +173,7 @@ export class SculptEngine {
   async smoothStroke(worldPos: [number, number, number], hand: string = 'right'): Promise<void> {
     this.activeStrokeHands.add(hand);
     const pending = this.capturePendingStroke('smooth', worldPos, hand);
-    if (this.strokeInFlight || this.remeshFlushInFlight) {
+    if (this.strokeInFlight) {
       this.pendingStrokes.set(hand, pending);
       return;
     }
@@ -242,11 +234,10 @@ export class SculptEngine {
       }
 
       const t3 = performance.now();
-      const queuedRemeshCount = this.queueChunksForRemesh([...modifiedChunks.values()]);
-      let remeshCount = 0;
-      if (this.shouldRunLiveRemesh()) {
-        remeshCount = await this.processPendingRemeshPass(LIVE_REMESH_CHUNK_BUDGET);
-      }
+      const remeshCount = await this.remeshModifiedChunks(
+        [...modifiedChunks.values()],
+        pending.mode === 'smooth',
+      );
 
       const t4 = performance.now();
 
@@ -255,7 +246,7 @@ export class SculptEngine {
         console.log(
           `[${pending.mode === 'smooth' ? 'Smooth' : 'Stroke'}] ${total.toFixed(1)}ms total | ` +
           `brush: ${(t2 - t1).toFixed(1)}ms (${modifiedChunks.size} chunks, ${steps.length} steps) | ` +
-          `remesh: ${(t4 - t3).toFixed(1)}ms (${remeshCount}/${queuedRemeshCount} chunks)`
+          `remesh: ${(t4 - t3).toFixed(1)}ms (${remeshCount} chunks)`
         );
       }
     } finally {
@@ -264,8 +255,6 @@ export class SculptEngine {
       const next = this.takePendingStroke();
       if (next) {
         void this.processStroke(next);
-      } else if (this.activeStrokeHands.size === 0 && this.pendingRemeshChunkKeys.size > 0) {
-        void this.flushPendingRemesh();
       }
     }
   }
@@ -281,31 +270,25 @@ export class SculptEngine {
       this._prevStrokePos.set(hand, null);
       this.pendingStrokeResets.delete(hand);
     }
-    if (!this.strokeInFlight && this.activeStrokeHands.size === 0 && this.pendingRemeshChunkKeys.size > 0) {
-      void this.flushPendingRemesh();
-    }
   }
 
-  private queueChunksForRemesh(modifiedChunks: Chunk[]): number {
+  private async remeshModifiedChunks(modifiedChunks: Chunk[], forceUploadModified = false): Promise<number> {
     const extraChunks = this.volume.syncBoundaries(modifiedChunks);
     const remeshChunks = [...modifiedChunks, ...extraChunks];
 
-    for (const chunk of remeshChunks) {
+    if (forceUploadModified) {
+      for (const chunk of modifiedChunks) {
+        this.gpu.invalidateChunk(chunkKey(chunk.coord));
+      }
+    }
+    for (const chunk of extraChunks) {
       const key = chunkKey(chunk.coord);
       this.gpu.invalidateChunk(key);
-      this.pendingRemeshChunkKeys.set(key, ++this.remeshPriorityCounter);
     }
-    return remeshChunks.length;
-  }
+    if (remeshChunks.length === 0) return 0;
 
-  /**
-   * Remesh chunks in a single batched GPU call.
-   * All buildPadded + marchingCubes dispatches in one submission.
-   */
-  private async remeshChunks(chunks: Chunk[]): Promise<void> {
-    if (chunks.length === 0) return;
-    for (let offset = 0; offset < chunks.length; offset += REMESH_BATCH_SIZE) {
-      const batch = chunks.slice(offset, offset + REMESH_BATCH_SIZE);
+    for (let offset = 0; offset < remeshChunks.length; offset += REMESH_BATCH_SIZE) {
+      const batch = remeshChunks.slice(offset, offset + REMESH_BATCH_SIZE);
       const items = this.createChunkNeighborhoodItems(batch);
       const meshResults = await this.gpu.buildPaddedAndExtractBatch(items);
 
@@ -317,52 +300,8 @@ export class SculptEngine {
         chunk.dirty = false;
       }
     }
-  }
 
-  private shouldRunLiveRemesh(): boolean {
-    if (this.pendingRemeshChunkKeys.size === 0) return false;
-    if (this.remeshFlushInFlight) return false;
-    return performance.now() - this.lastRemeshAt >= LIVE_REMESH_INTERVAL_MS;
-  }
-
-  private async processPendingRemeshPass(limit: number): Promise<number> {
-    if (this.pendingRemeshChunkKeys.size === 0) return 0;
-
-    const keys = [...this.pendingRemeshChunkKeys.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([key]) => key);
-    for (const key of keys) {
-      this.pendingRemeshChunkKeys.delete(key);
-    }
-
-    const chunks = keys
-      .map((key) => this.volume.getChunk(this.parseChunkKey(key)))
-      .filter((chunk): chunk is Chunk => chunk !== undefined);
-
-    if (chunks.length === 0) return 0;
-
-    await this.remeshChunks(chunks);
-    this.lastRemeshAt = performance.now();
-    return chunks.length;
-  }
-
-  private async flushPendingRemesh(): Promise<void> {
-    if (this.remeshFlushInFlight || this.strokeInFlight) return;
-    if (this.pendingRemeshChunkKeys.size === 0) return;
-
-    this.remeshFlushInFlight = true;
-    try {
-      while (this.pendingRemeshChunkKeys.size > 0 && this.activeStrokeHands.size === 0) {
-        await this.processPendingRemeshPass(FLUSH_REMESH_CHUNK_BUDGET);
-      }
-    } finally {
-      this.remeshFlushInFlight = false;
-      const next = this.takePendingStroke();
-      if (next) {
-        void this.processStroke(next);
-      }
-    }
+    return remeshChunks.length;
   }
 
   private getMaxBrushRadius(): number {
@@ -563,9 +502,7 @@ export class SculptEngine {
   async waitForIdle(): Promise<void> {
     while (
       this.strokeInFlight ||
-      this.remeshFlushInFlight ||
-      this.pendingStrokes.size > 0 ||
-      this.pendingRemeshChunkKeys.size > 0
+      this.pendingStrokes.size > 0
     ) {
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
     }
@@ -578,7 +515,6 @@ export class SculptEngine {
     this.activeStrokeHands.clear();
     this.pendingStrokes.clear();
     this.pendingStrokeResets.clear();
-    this.pendingRemeshChunkKeys.clear();
     for (const [, chunkMesh] of this.chunkMeshes) {
       this.sculptGroup.remove(chunkMesh.mesh);
       chunkMesh.mesh.geometry.dispose();

@@ -34,6 +34,13 @@ export const sculptStressShortPlay: PlayScenario = {
         ctx.xr.pose('right', point, DEFAULT_ROTATION);
         await ctx.waitFrames(2);
       }
+
+      const clayStats = ctx.clayStats('clay_1') as {
+        stats?: { vertices?: number };
+      } | null;
+      if ((clayStats?.stats?.vertices ?? 0) <= 0) {
+        throw new Error('Clay mesh did not update before trigger release');
+      }
     });
 
     ctx.xr.release('right', 'trigger');

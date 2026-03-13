@@ -218,6 +218,7 @@ export class PlayRunner {
       reset: () => this.actions.reset(),
       measure: async (label, fn) => this.measure(label, fn),
       snapshotScene: () => this.actions.snapshotScene(),
+      clayStats: (nodeId) => this.actions.clayStats(nodeId),
       captureViewport: (label) => this.captureViewport(label),
     };
   }

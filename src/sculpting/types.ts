@@ -27,8 +27,8 @@ export interface SculptConfig {
 }
 
 export const DEFAULT_SCULPT_CONFIG: SculptConfig = {
-  chunkSize: 32,
-  voxelSize: 0.002, // 2mm voxels
+  chunkSize: 24,
+  voxelSize: 0.003, // 3mm voxels for cheaper live remesh
   emptyValue: 1.0,
 };
 

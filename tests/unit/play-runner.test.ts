@@ -15,6 +15,7 @@ function createActions(overrides: Partial<PlayHarnessActions> = {}): PlayHarness
     focus: vi.fn(),
     reset: vi.fn(async () => {}),
     snapshotScene: vi.fn(() => ({ nodes: [] })),
+    clayStats: vi.fn(() => ({ stats: { vertices: 123 } })),
     captureViewport: vi.fn(() => 'data:image/png;base64,stub'),
     ...overrides,
   };

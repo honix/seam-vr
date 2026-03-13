@@ -80,6 +80,7 @@ export interface PlayContext {
   reset(): Promise<void>;
   measure(label: string, fn: () => Promise<void> | void): Promise<PlayMeasurementResult>;
   snapshotScene(): object;
+  clayStats(nodeId?: string): object | null;
   captureViewport(label?: string): string;
 }
 
@@ -95,6 +96,7 @@ export interface PlayHarnessActions {
   focus(target: Vec3, distance?: number): void;
   reset(): Promise<void>;
   snapshotScene(): object;
+  clayStats(nodeId?: string): object | null;
   captureViewport(): string;
 }
 

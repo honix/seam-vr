@@ -174,6 +174,21 @@ describe('Sculpting System', () => {
       expect(vol.worldToChunkCoord(0.09, 0, 0).x).toBe(1);
     });
 
+    it('only returns chunks whose bounds actually intersect the brush sphere', () => {
+      const vol = new SDFVolume(TEST_CONFIG);
+
+      const coords = vol
+        .chunksInSphere(0.0795, 0.0795, 0.04, 0.0006)
+        .map((coord) => chunkKey(coord))
+        .sort();
+
+      expect(coords).toEqual([
+        '0,0,0',
+        '0,1,0',
+        '1,0,0',
+      ]);
+    });
+
     it('syncs shared boundary samples into existing neighbors', () => {
       const vol = new SDFVolume(TEST_CONFIG);
       const left = vol.getOrCreateChunk({ x: 0, y: 0, z: 0 });

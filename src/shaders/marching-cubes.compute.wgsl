@@ -111,7 +111,7 @@ fn interp_normal(
   return n / len;
 }
 
-@compute @workgroup_size(4, 4, 4)
+@compute @workgroup_size(8, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let cx = global_id.x;
   let cy = global_id.y;

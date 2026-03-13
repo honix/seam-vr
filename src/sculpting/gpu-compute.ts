@@ -27,6 +27,9 @@ const MAX_BATCH = 6;
 // but real sculpt surfaces rarely exceed 30% cell fill = ~100K vertices.
 // This caps GPU pool memory at ~40MB instead of ~183MB.
 const MAX_VERTICES_PER_CHUNK = 100_000;
+const WORKGROUP_SIZE_X = 8;
+const WORKGROUP_SIZE_Y = 4;
+const WORKGROUP_SIZE_Z = 4;
 
 export class GPUCompute {
   private device: GPUDevice | null = null;
@@ -269,7 +272,9 @@ export class GPUCompute {
     const cs = this.config.chunkSize;
     const vs = this.config.voxelSize;
     const samples = cs + 1;
-    const workgroups = Math.ceil(samples / 4);
+    const workgroupsX = Math.ceil(samples / WORKGROUP_SIZE_X);
+    const workgroupsY = Math.ceil(samples / WORKGROUP_SIZE_Y);
+    const workgroupsZ = Math.ceil(samples / WORKGROUP_SIZE_Z);
 
     for (let offset = 0; offset < chunks.length; offset += MAX_BATCH) {
       const n = Math.min(MAX_BATCH, chunks.length - offset);
@@ -316,7 +321,7 @@ export class GPUCompute {
         const pass = encoder.beginComputePass();
         pass.setPipeline(this.brushPipeline);
         pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(workgroups, workgroups, workgroups);
+        pass.dispatchWorkgroups(workgroupsX, workgroupsY, workgroupsZ);
         pass.end();
 
         encoder.copyBufferToBuffer(gpuData.sdfBuffer, 0, this.sdfReadbackBuffers[i], 0, this.sdfSize);
@@ -360,8 +365,12 @@ export class GPUCompute {
     const vs = this.config.voxelSize;
     const samples = cs + 1;
     const padded = samples + 2;
-    const workgroups = Math.ceil(samples / 4);
-    const bpWorkgroups = Math.ceil(padded / 4);
+    const workgroupsX = Math.ceil(samples / WORKGROUP_SIZE_X);
+    const workgroupsY = Math.ceil(samples / WORKGROUP_SIZE_Y);
+    const workgroupsZ = Math.ceil(samples / WORKGROUP_SIZE_Z);
+    const bpWorkgroupsX = Math.ceil(padded / WORKGROUP_SIZE_X);
+    const bpWorkgroupsY = Math.ceil(padded / WORKGROUP_SIZE_Y);
+    const bpWorkgroupsZ = Math.ceil(padded / WORKGROUP_SIZE_Z);
 
     const sourceBuffers = new Map<string, GPUBuffer>();
     const uploadSnapshot = (chunk: Chunk | undefined): GPUBuffer | null => {
@@ -473,7 +482,7 @@ export class GPUCompute {
       bpPass.setPipeline(this.buildPaddedPipeline);
       for (let i = 0; i < n; i++) {
         bpPass.setBindGroup(0, bpBindGroups[i]);
-        bpPass.dispatchWorkgroups(bpWorkgroups, bpWorkgroups, bpWorkgroups);
+        bpPass.dispatchWorkgroups(bpWorkgroupsX, bpWorkgroupsY, bpWorkgroupsZ);
       }
       bpPass.end();
 
@@ -481,7 +490,7 @@ export class GPUCompute {
       smoothPass.setPipeline(this.smoothPipeline);
       for (let i = 0; i < n; i++) {
         smoothPass.setBindGroup(0, smoothBindGroups[i]);
-        smoothPass.dispatchWorkgroups(workgroups, workgroups, workgroups);
+        smoothPass.dispatchWorkgroups(workgroupsX, workgroupsY, workgroupsZ);
       }
       smoothPass.end();
 
@@ -530,8 +539,12 @@ export class GPUCompute {
     const vs = this.config.voxelSize;
     const samples = cs + 1;
     const padded = samples + 2;
-    const bpWorkgroups = Math.ceil(padded / 4);
-    const mcWorkgroups = Math.ceil(cs / 4);
+    const bpWorkgroupsX = Math.ceil(padded / WORKGROUP_SIZE_X);
+    const bpWorkgroupsY = Math.ceil(padded / WORKGROUP_SIZE_Y);
+    const bpWorkgroupsZ = Math.ceil(padded / WORKGROUP_SIZE_Z);
+    const mcWorkgroupsX = Math.ceil(cs / WORKGROUP_SIZE_X);
+    const mcWorkgroupsY = Math.ceil(cs / WORKGROUP_SIZE_Y);
+    const mcWorkgroupsZ = Math.ceil(cs / WORKGROUP_SIZE_Z);
 
     const results: MeshData[] = [];
 
@@ -587,7 +600,7 @@ export class GPUCompute {
         const bpPass = encoder.beginComputePass();
         bpPass.setPipeline(this.buildPaddedPipeline);
         bpPass.setBindGroup(0, bpBG);
-        bpPass.dispatchWorkgroups(bpWorkgroups, bpWorkgroups, bpWorkgroups);
+        bpPass.dispatchWorkgroups(bpWorkgroupsX, bpWorkgroupsY, bpWorkgroupsZ);
         bpPass.end();
 
         // MC uniforms
@@ -620,7 +633,7 @@ export class GPUCompute {
         const mcPass = encoder.beginComputePass();
         mcPass.setPipeline(this.mcPipeline);
         mcPass.setBindGroup(0, mcBG);
-        mcPass.dispatchWorkgroups(mcWorkgroups, mcWorkgroups, mcWorkgroups);
+        mcPass.dispatchWorkgroups(mcWorkgroupsX, mcWorkgroupsY, mcWorkgroupsZ);
         mcPass.end();
 
         encoder.copyBufferToBuffer(this.counterBuffers[i], 0, this.counterReadbackBuffers[i], 0, 4);

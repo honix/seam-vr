@@ -41,7 +41,7 @@ describe('SculptEngine', () => {
 
     engine.brushRadius = 10;
 
-    expect(engine.brushRadius).toBeCloseTo(0.096, 6);
+    expect(engine.brushRadius).toBeCloseTo(0.108, 6);
     engine.dispose();
   });
 
@@ -98,6 +98,24 @@ describe('SculptEngine', () => {
     await Promise.resolve();
 
     expect(gpu.applyBrushBatch).toHaveBeenCalledTimes(2);
+    engine.dispose();
+  });
+
+  it('remeshes immediately during a short default-radius stroke', async () => {
+    gpuInstances.length = 0;
+    const engine = new SculptEngine(new THREE.Group());
+    const gpu = gpuInstances[0];
+
+    gpu.buildPaddedAndExtractBatch.mockImplementation(async (items: unknown[]) =>
+      items.map(() => ({ vertexCount: 12, interleaved: new Float32Array(72) })),
+    );
+
+    await engine.stroke([0, 0, 0], 'right');
+    await engine.stroke([0.01, 0, 0], 'right');
+
+    expect(gpu.applyBrushBatch).toHaveBeenCalledTimes(1);
+    expect(gpu.buildPaddedAndExtractBatch.mock.calls.length).toBeGreaterThan(0);
+    expect(engine.getStats().vertices).toBeGreaterThan(0);
     engine.dispose();
   });
 });

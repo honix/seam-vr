@@ -24,7 +24,7 @@ struct BuildPaddedUniforms {
 @group(0) @binding(7) var<storage, read> nzp_sdf: array<f32>;
 @group(0) @binding(8) var<storage, read_write> padded: array<f32>; // (samples+2)^3
 
-@compute @workgroup_size(4, 4, 4)
+@compute @workgroup_size(8, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let S = uniforms.samples_per_axis;
   let P = S + 2u;

@@ -24,7 +24,7 @@ struct BrushUniforms {
 @group(0) @binding(1) var<storage, read> padded_sdf: array<f32>;
 @group(0) @binding(2) var<storage, read_write> sdf_out: array<f32>;
 
-@compute @workgroup_size(4, 4, 4)
+@compute @workgroup_size(8, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let ix = global_id.x;
   let iy = global_id.y;

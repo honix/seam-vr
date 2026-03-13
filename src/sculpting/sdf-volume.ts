@@ -53,7 +53,10 @@ export class SDFVolume {
     for (let z = minCoord.z; z <= maxCoord.z; z++) {
       for (let y = minCoord.y; y <= maxCoord.y; y++) {
         for (let x = minCoord.x; x <= maxCoord.x; x++) {
-          coords.push({ x, y, z });
+          const coord = { x, y, z };
+          if (this.sphereIntersectsChunk(coord, cx, cy, cz, radius, cs)) {
+            coords.push(coord);
+          }
         }
       }
     }
@@ -176,5 +179,30 @@ export class SDFVolume {
     }
 
     return additionalDirty;
+  }
+
+  private sphereIntersectsChunk(
+    coord: ChunkCoord,
+    cx: number,
+    cy: number,
+    cz: number,
+    radius: number,
+    chunkWorldSize: number,
+  ): boolean {
+    const minX = coord.x * chunkWorldSize;
+    const minY = coord.y * chunkWorldSize;
+    const minZ = coord.z * chunkWorldSize;
+    const maxX = minX + chunkWorldSize;
+    const maxY = minY + chunkWorldSize;
+    const maxZ = minZ + chunkWorldSize;
+
+    const nearestX = Math.max(minX, Math.min(cx, maxX));
+    const nearestY = Math.max(minY, Math.min(cy, maxY));
+    const nearestZ = Math.max(minZ, Math.min(cz, maxZ));
+
+    const dx = cx - nearestX;
+    const dy = cy - nearestY;
+    const dz = cz - nearestZ;
+    return dx * dx + dy * dy + dz * dz <= radius * radius;
   }
 }

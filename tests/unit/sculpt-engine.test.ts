@@ -5,6 +5,14 @@ const { gpuInstances } = vi.hoisted(() => ({
   gpuInstances: [] as any[],
 }));
 
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 vi.mock('../../src/sculpting/gpu-compute', () => ({
   GPUCompute: class MockGPUCompute {
     ready = true;
@@ -65,6 +73,31 @@ describe('SculptEngine', () => {
     await engine.stroke([2, 0, 0], 'right');
 
     expect(gpu.applyBrushBatch.mock.calls.length).toBeGreaterThan(1);
+    engine.dispose();
+  });
+
+  it('drains the last queued stroke segment after trigger release', async () => {
+    gpuInstances.length = 0;
+    const engine = new SculptEngine(new THREE.Group());
+    const gpu = gpuInstances[0];
+    const inFlightBrush = createDeferred<void>();
+
+    gpu.applyBrushBatch
+      .mockImplementationOnce(() => inFlightBrush.promise)
+      .mockImplementation(async () => {});
+
+    await engine.stroke([0, 0, 0], 'right');
+    const activeStroke = engine.stroke([0.05, 0, 0], 'right');
+    await Promise.resolve();
+    await engine.stroke([0.1, 0, 0], 'right');
+    engine.endStroke('right');
+
+    inFlightBrush.resolve();
+    await activeStroke;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(gpu.applyBrushBatch).toHaveBeenCalledTimes(2);
     engine.dispose();
   });
 });

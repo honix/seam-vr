@@ -15,6 +15,17 @@ interface ChunkMeshData {
   vertexCount: number;
 }
 
+export interface SnapshotEntry {
+  key: string;
+  data: Float32Array;
+}
+
+interface StrokeSession {
+  preSnapshots: Map<string, Float32Array>;
+  touchedKeys: Set<string>;
+  pendingCommit: boolean;
+}
+
 const MAX_AFFECTED_CHUNKS_PER_STROKE = 128;
 const REMESH_BATCH_SIZE = 6;
 const ENABLE_SCULPT_TIMING_LOGS = false;
@@ -53,6 +64,11 @@ export class SculptEngine {
 
   // Concurrent stroke guard — coalesce to the latest sample while GPU is busy.
   private strokeInFlight = false;
+
+  // Stroke session tracking for undo/redo
+  private _strokeSessions: Map<string, StrokeSession> = new Map();
+  engineId: string = '';
+  onStrokeCommit?: (engineId: string, pre: SnapshotEntry[], post: SnapshotEntry[]) => void;
 
   // Sculpt group in scene
   sculptGroup: THREE.Group;
@@ -219,6 +235,22 @@ export class SculptEngine {
           prevCenter: step.from,
         };
         const stepChunks = this.getStrokeChunks(step.to, step.from, influenceRadius);
+
+        // Capture pre-snapshots for chunks first encountered in this session.
+        // CPU data is authoritative here: new chunks have emptyValue, previously-sculpted
+        // chunks were synced by the prior session's _commitSession.
+        // (Boundary-affected chunks may have slightly stale CPU data, which is acceptable.)
+        const session = this._strokeSessions.get(pending.hand);
+        if (session) {
+          for (const chunk of stepChunks) {
+            const key = chunkKey(chunk.coord);
+            if (!session.preSnapshots.has(key)) {
+              session.preSnapshots.set(key, chunk.data.slice());
+            }
+            session.touchedKeys.add(key);
+          }
+        }
+
         if (pending.mode === 'smooth') {
           await this.gpu.applySmoothBatch(this.createChunkNeighborhoodItems(stepChunks), stepBrush);
         } else {
@@ -364,6 +396,11 @@ export class SculptEngine {
 
     this._prevStrokePos.set(hand, null);
     this.pendingStrokeResets.delete(hand);
+
+    const session = this._strokeSessions.get(hand);
+    if (session?.pendingCommit) {
+      void this._commitSession(hand, session);
+    }
   }
 
   private createStrokeSteps(
@@ -494,6 +531,80 @@ export class SculptEngine {
     this.sculptMaterial.color.setRGB(material.color[0], material.color[1], material.color[2]);
     this.sculptMaterial.roughness = material.roughness;
     this.sculptMaterial.metalness = material.metallic;
+  }
+
+  /**
+   * Begin a stroke session for undo/redo tracking (call when trigger is pressed).
+   */
+  beginStrokeSession(hand: string): void {
+    if (this._strokeSessions.has(hand)) return;
+    this._strokeSessions.set(hand, {
+      preSnapshots: new Map(),
+      touchedKeys: new Set(),
+      pendingCommit: false,
+    });
+  }
+
+  /**
+   * End a stroke session and register it as an undoable command (call when trigger is released).
+   */
+  endStrokeSession(hand: string): void {
+    const session = this._strokeSessions.get(hand);
+    if (!session) return;
+    if (this.strokeInFlight || this.pendingStrokes.has(hand)) {
+      session.pendingCommit = true;
+      return;
+    }
+    void this._commitSession(hand, session);
+  }
+
+  private async _commitSession(hand: string, session: StrokeSession): Promise<void> {
+    this._strokeSessions.delete(hand);
+
+    if (session.touchedKeys.size === 0) return;
+
+    const touchedChunks: Chunk[] = [];
+    for (const key of session.touchedKeys) {
+      const coord = this.parseChunkKey(key);
+      const chunk = this.volume.getChunk(coord);
+      if (chunk) touchedChunks.push(chunk);
+    }
+
+    await this.waitForIdle();
+    await this.gpu.syncChunksToCPU(touchedChunks);
+
+    const postSnapshots: SnapshotEntry[] = [];
+    for (const chunk of touchedChunks) {
+      postSnapshots.push({ key: chunkKey(chunk.coord), data: chunk.data.slice() });
+    }
+
+    const preSnapshots: SnapshotEntry[] = [];
+    for (const key of session.touchedKeys) {
+      const pre = session.preSnapshots.get(key);
+      if (pre) preSnapshots.push({ key, data: pre });
+    }
+
+    this.onStrokeCommit?.(this.engineId, preSnapshots, postSnapshots);
+  }
+
+  /**
+   * Restore chunk snapshots to CPU and GPU, then remesh.
+   * Used by undo/redo to apply pre/post stroke states.
+   */
+  async restoreChunkSnapshots(snapshots: SnapshotEntry[]): Promise<void> {
+    await this.waitForIdle();
+
+    const chunks: Chunk[] = [];
+    for (const { key, data } of snapshots) {
+      const coord = this.parseChunkKey(key);
+      const chunk = this.volume.getOrCreateChunk(coord);
+      chunk.data.set(data);
+      chunk.dirty = true;
+      chunks.push(chunk);
+    }
+
+    this.gpu.uploadChunksToGPU(chunks);
+    await this.remeshModifiedChunks(chunks, false);
   }
 
   async waitForIdle(options?: { syncCpu?: boolean; chunks?: Chunk[] }): Promise<void> {

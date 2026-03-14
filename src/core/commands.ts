@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { CommandBus, Command } from './command-bus';
 import { SceneGraph, SceneNode, DeformerConfig } from './scene-graph';
+import type { ClayManager } from '../sculpting/clay-manager';
+import type { SnapshotEntry } from '../sculpting/sculpt-engine';
 import { createPrimitiveGeometry } from '../primitives/primitive-factory';
 import { getDefaultParams } from '../primitives/primitive-params';
 import { DeformerStack } from '../deformers/deformer-stack';
@@ -612,6 +614,23 @@ export function registerAllCommands(
     return {
       undo: () => {
         sg.reparent(cmd.id, oldParentId);
+      },
+    };
+  });
+}
+
+export function registerSculptCommands(bus: CommandBus, clayManager: ClayManager): void {
+  bus.register('sculpt_stroke', (cmd: Command) => {
+    const engine = clayManager.getEngine(cmd.engineId as string);
+    if (!engine) return;
+
+    const postSnapshots = cmd.postSnapshots as SnapshotEntry[];
+    void engine.restoreChunkSnapshots(postSnapshots);
+
+    return {
+      undo: () => {
+        const preSnapshots = cmd.preSnapshots as SnapshotEntry[];
+        void engine.restoreChunkSnapshots(preSnapshots);
       },
     };
   });

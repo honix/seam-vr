@@ -38,6 +38,7 @@ export class SculptInteraction {
     state.isSculpting = true;
     state.brushType = brushType;
 
+    engine.beginStrokeSession(hand);
     engine.brushStrength = strength;
     if (brushType === 'smooth') {
       engine.smoothStroke(localPosition, hand);
@@ -70,6 +71,8 @@ export class SculptInteraction {
     if (!state.isSculpting) return;
 
     state.isSculpting = false;
-    this.clayManager.getActiveEngine()?.endStroke(hand);
+    const engine = this.clayManager.getActiveEngine();
+    engine?.endStroke(hand);
+    engine?.endStrokeSession(hand);
   }
 }

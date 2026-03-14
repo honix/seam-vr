@@ -819,6 +819,24 @@ export class GPUCompute {
     }
   }
 
+  /**
+   * Upload CPU chunk.data to GPU buffers unconditionally.
+   * Used during undo/redo to restore a snapshot.
+   * After this call: gpuDirty=false, cpuDirty=false, initialized=true.
+   */
+  uploadChunksToGPU(chunks: Chunk[]): void {
+    if (!this.device) return;
+    for (const chunk of chunks) {
+      const key = `${chunk.coord.x},${chunk.coord.y},${chunk.coord.z}`;
+      const gpuData = this.chunkBuffers.get(key);
+      if (!gpuData) continue;
+      this.device.queue.writeBuffer(gpuData.sdfBuffer, 0, chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+      gpuData.initialized = true;
+      gpuData.cpuDirty = false;
+      gpuData.gpuDirty = false;
+    }
+  }
+
   destroy(): void {
     for (const [, gpuData] of this.chunkBuffers) {
       gpuData.sdfBuffer.destroy();

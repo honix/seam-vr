@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { SceneGraph } from './core/scene-graph';
 import { SceneAnchorManager } from './core/scene-anchor-manager';
 import { CommandBus } from './core/command-bus';
-import { registerAllCommands } from './core/commands';
+import { registerAllCommands, registerSculptCommands } from './core/commands';
 import { initTestHarness, seedDefaultHarnessScene } from './test-harness/harness';
 
 import { setupEnvironment, createGroundGrid } from './rendering/environment';
@@ -63,6 +63,7 @@ async function init() {
   const sceneGraph = new SceneGraph();
   const commandBus = new CommandBus(sceneGraph);
   registerAllCommands(commandBus, sceneGraph);
+  const SCULPT_HISTORY_LIMIT = 50;
   const sceneAnchorManager = new SceneAnchorManager(sceneGraph, worldGroup);
 
   const orbitControls = createOrbitCamera(camera, renderer.domElement);
@@ -95,6 +96,12 @@ async function init() {
   const clayManager = new ClayManager(sceneGraph, worldGroup);
   const sculptInteraction = new SculptInteraction(clayManager);
   const brushPreview = new BrushPreview(scene, toolSystem);
+
+  registerSculptCommands(commandBus, clayManager);
+  clayManager.setStrokeCommitHandler((engineId, pre, post) => {
+    commandBus.exec({ cmd: 'sculpt_stroke', engineId, preSnapshots: pre, postSnapshots: post });
+    commandBus.trimUndoStack(SCULPT_HISTORY_LIMIT);
+  });
 
   const animationSystem = new AnimationSystem();
   const timelineController = new TimelineController();

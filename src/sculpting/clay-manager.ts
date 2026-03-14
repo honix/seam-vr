@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { SceneGraph, SceneNode } from '../core/scene-graph';
-import { SculptEngine } from './sculpt-engine';
+import { SculptEngine, SnapshotEntry } from './sculpt-engine';
+
+export type StrokeCommitHandler = (engineId: string, pre: SnapshotEntry[], post: SnapshotEntry[]) => void;
 
 export class ClayManager {
   private sceneGraph: SceneGraph;
@@ -8,6 +10,7 @@ export class ClayManager {
   private engines = new Map<string, SculptEngine>();
   private initPromises = new Map<string, Promise<void>>();
   private activeClayId: string | null = null;
+  private _strokeCommitHandler?: StrokeCommitHandler;
 
   constructor(sceneGraph: SceneGraph, worldGroup: THREE.Object3D) {
     this.sceneGraph = sceneGraph;
@@ -61,6 +64,14 @@ export class ClayManager {
     return this.engines.get(nodeId) ?? null;
   }
 
+  setStrokeCommitHandler(handler: StrokeCommitHandler): void {
+    this._strokeCommitHandler = handler;
+    for (const [id, engine] of this.engines) {
+      engine.engineId = id;
+      engine.onStrokeCommit = handler;
+    }
+  }
+
   toActiveClayLocalPosition(position: [number, number, number]): [number, number, number] | null {
     if (!this.activeClayId) return null;
     const node = this.sceneGraph.getNode(this.activeClayId);
@@ -106,6 +117,10 @@ export class ClayManager {
 
     const engine = new SculptEngine(node.object3D, undefined, `clay_mesh_${node.id}`);
     engine.applyMaterial(node.material);
+    engine.engineId = node.id;
+    if (this._strokeCommitHandler) {
+      engine.onStrokeCommit = this._strokeCommitHandler;
+    }
     this.engines.set(node.id, engine);
 
     try {

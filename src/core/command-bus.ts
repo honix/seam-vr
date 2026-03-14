@@ -95,6 +95,12 @@ export class CommandBus {
     this.redoStack.length = 0;
   }
 
+  trimUndoStack(maxEntries: number): void {
+    if (this.undoStack.length > maxEntries) {
+      this.undoStack.splice(0, this.undoStack.length - maxEntries);
+    }
+  }
+
   private emit(event: BusEventType, data: any): void {
     const handlers = this.listeners.get(event);
     if (handlers) {

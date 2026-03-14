@@ -624,7 +624,7 @@ export class ClickableRowWidget implements Widget {
     const textColor = this.selected ? '#ff8800' : '#e0e0e0';
 
     ctx.fillStyle = textColor;
-    ctx.font = '16px sans-serif';
+    ctx.font = '16px monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
 

@@ -12,6 +12,8 @@ import {
 } from '../types';
 import type { LayerType, LightData } from './layer-types';
 
+export const SCENE_ROOT_ID = '__root__';
+
 export interface DeformerConfig {
   type: DeformerType;
   [key: string]: any;
@@ -81,7 +83,7 @@ export class SceneGraph {
 
   constructor() {
     // Virtual root node - not included in getAllNodes
-    this.root = new SceneNode('__root__', 'box');
+    this.root = new SceneNode(SCENE_ROOT_ID, 'box');
   }
 
   addNode(node: SceneNode): void {

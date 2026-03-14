@@ -6,6 +6,7 @@ describe('PLAY_SCENARIOS', () => {
     expect(PLAY_SCENARIOS.map((scenario) => scenario.id).sort()).toEqual([
       'boot_smoke',
       'sculpt_stress_short',
+      'ui_hierarchy_root',
       'ui_smoke',
     ]);
   });

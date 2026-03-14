@@ -57,7 +57,7 @@ declare global {
       snapshotScene: () => object;
       captureViewport: () => string;
       clayStats: (nodeId?: string) => object | null;
-      select: (nodeId: string) => void;
+      select: (nodeId: string | null) => void;
       activateClay: (nodeId: string | null) => void;
       deselect: () => void;
       openInspector: (position?: Vec3) => void;
@@ -286,7 +286,7 @@ export function initTestHarness(options: TestHarnessOptions): TestHarnessControl
     clayStats(nodeId?: string) {
       return getClayStats(nodeId);
     },
-    select(nodeId: string) {
+    select(nodeId: string | null) {
       selectionManager?.selectById(nodeId);
     },
     activateClay(nodeId: string | null) {

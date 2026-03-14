@@ -24,11 +24,13 @@
 
 ## Browser Harness Workflow
 - Rebuild after source changes with `npm run build`.
-- Serve the built app locally and open it in Chrome. A common flow is previewing the app on `http://127.0.0.1:4173/`.
+- Serve the built app locally with `npm run preview -- --host 127.0.0.1 --port 4173`.
+- Open the preview build in Chrome at `http://127.0.0.1:4173/`.
 - Use `?play=<id>` to auto-run a built-in scenario after startup.
 - The play runner emits a machine-friendly console line:
   - `[PlayResult] <json>`
 - For browser automation, prefer checking console output and `window.__seam` state. Do not use DOM text waiting for console logs.
+- For Chrome verification and screenshots, use the preview server flow above instead of `file://` loading or ad hoc static servers.
 
 ## `window.__seam` Notes
 - The harness exposes a debugging API on `window.__seam`.
@@ -56,6 +58,7 @@
 ## Built-In Play Scenarios
 - `boot_smoke`
 - `sculpt_stress_short`
+- `ui_hierarchy_root`
 - `ui_smoke`
 
 ## Harness Testing Tips

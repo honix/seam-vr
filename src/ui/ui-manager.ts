@@ -12,8 +12,13 @@ import { WindowToolController } from './window-tool-controller';
 import type { ClayManager } from '../sculpting/clay-manager';
 import type { Hand, Vec3, Vec4 } from '../types';
 import type { XRControllerState } from '../xr/xr-controller';
+import { SCENE_ROOT_ID } from '../core/scene-graph';
 
 type ManagedPanel = InspectorPanel | HierarchyPanel | TimelinePanel;
+
+export function normalizeHierarchyParentId(selectedNodeId: string | null): string | null {
+  return selectedNodeId === SCENE_ROOT_ID ? null : selectedNodeId;
+}
 
 interface HandAnchorPose {
   position: Vec3;
@@ -215,7 +220,7 @@ export class UIManager {
   createNodeFromHierarchy(kind: string): void {
     const idBase = `${kind}_${Date.now()}`;
     const position = this.computeSpawnPositionInFrontOfCamera();
-    const parentId = this.selectedNodeId ?? null;
+    const parentId = normalizeHierarchyParentId(this.selectedNodeId);
 
     switch (kind) {
       case 'group':

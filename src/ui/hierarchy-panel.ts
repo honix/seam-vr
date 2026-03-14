@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { FloatingPanel } from './floating-panel';
-import { SceneGraph, SceneNode } from '../core/scene-graph';
+import { SCENE_ROOT_ID, SceneGraph, SceneNode } from '../core/scene-graph';
 import { ButtonWidget, ClickableRowWidget, LabelWidget } from './widgets';
 
 const ROW_H = 28;
@@ -29,6 +29,47 @@ const CREATE_BUTTONS: Array<{ id: string; label: string }> = [
   { id: 'capsule', label: 'Capsule' },
   { id: 'light', label: 'Light' },
 ];
+
+export interface HierarchyRow {
+  nodeId: string;
+  text: string;
+  icon: string;
+  selected: boolean;
+}
+
+function formatTreePrefix(ancestorHasNext: boolean[], isLast: boolean): string {
+  const prefix = ancestorHasNext.map((hasNext) => (hasNext ? '\u2502  ' : '   ')).join('');
+  return `${prefix}${isLast ? '\u2514\u2500 ' : '\u251c\u2500 '}`;
+}
+
+export function buildHierarchyRows(root: SceneNode, selectedNodeId: string | null): HierarchyRow[] {
+  const rows: HierarchyRow[] = [
+    {
+      nodeId: SCENE_ROOT_ID,
+      text: 'Scene Root',
+      icon: '\u25ce',
+      selected: selectedNodeId === SCENE_ROOT_ID,
+    },
+  ];
+
+  const visit = (node: SceneNode, ancestorHasNext: boolean[]): void => {
+    node.children.forEach((child, index) => {
+      const isLast = index === node.children.length - 1;
+      const icon = TYPE_ICONS[child.layerType] ?? '\u25a0';
+      const vis = child.visible ? '' : ' [hidden]';
+      rows.push({
+        nodeId: child.id,
+        text: `${formatTreePrefix(ancestorHasNext, isLast)}${child.id}${vis}`,
+        icon,
+        selected: child.id === selectedNodeId,
+      });
+      visit(child, [...ancestorHasNext, !isLast]);
+    });
+  };
+
+  visit(root, []);
+  return rows;
+}
 
 export class HierarchyPanel extends FloatingPanel {
   readonly panelKind = 'hierarchy';
@@ -78,39 +119,25 @@ export class HierarchyPanel extends FloatingPanel {
     const contentW = cw - PAD_X * 2;
 
     let rowY = this.buildCreateRows(contentW);
-    const root = this.sceneGraph.getRoot();
-    let rowIndex = 0;
+    const rows = buildHierarchyRows(this.sceneGraph.getRoot(), this.selectedNodeId);
 
-    const visit = (node: SceneNode, depth: number) => {
-      for (const child of node.children) {
-        const icon = TYPE_ICONS[child.layerType] ?? '\u25A0';
-        const vis = child.visible ? '' : ' [hidden]';
-        const label = `${child.id}${vis}`;
-        const selected = child.id === this.selectedNodeId;
-        const nodeId = child.id;
-
-        this.panelCanvas.addWidget(
-          new ClickableRowWidget(PAD_X, rowY + rowIndex * ROW_H, contentW, ROW_H, {
-            text: label,
-            icon,
-            selected,
-            indent: depth * INDENT_PX,
-            onClick: () => {
-              this.onSelectCallback?.(nodeId);
-            },
-          })
-        );
-
-        rowIndex++;
-        visit(child, depth + 1);
-      }
-    };
-
-    visit(root, 0);
-
-    if (rowIndex === 0) {
+    rows.forEach((row, rowIndex) => {
       this.panelCanvas.addWidget(
-        new LabelWidget(PAD_X, rowY + 10, contentW, ROW_H, { text: '(empty scene)', color: '#888888' })
+        new ClickableRowWidget(PAD_X, rowY + rowIndex * ROW_H, contentW, ROW_H, {
+          text: row.text,
+          icon: row.icon,
+          selected: row.selected,
+          indent: row.nodeId === SCENE_ROOT_ID ? 0 : INDENT_PX / 2,
+          onClick: () => {
+            this.onSelectCallback?.(row.nodeId);
+          },
+        })
+      );
+    });
+
+    if (rows.length === 1) {
+      this.panelCanvas.addWidget(
+        new LabelWidget(PAD_X, rowY + ROW_H + 10, contentW, ROW_H, { text: '(empty scene)', color: '#888888' })
       );
     }
 
